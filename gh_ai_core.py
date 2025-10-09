@@ -20,6 +20,14 @@ import requests
 from pathlib import Path
 import time
 
+# Import model monitoring
+try:
+    from model_monitor import ModelMonitor, SmartModelSelector
+    MONITORING_AVAILABLE = True
+except ImportError:
+    MONITORING_AVAILABLE = False
+    print("⚠️  Model monitoring not available. Install with: pip install -e .")
+
 # Disable SQLite date adapter deprecation warning for Python 3.12+
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 sqlite3.register_converter("TIMESTAMP", lambda val: datetime.fromisoformat(val.decode()))
@@ -363,6 +371,16 @@ class AIAssistant:
         self.github_context = GitHubContextExtractor()
         self.use_ollama_fallback = True  # Enable local fallback by default
         
+        # Initialize model monitoring
+        if MONITORING_AVAILABLE:
+            self.monitor = ModelMonitor()
+            self.model_selector = SmartModelSelector(
+                self.monitor, FREE_MODELS, self.token_manager
+            )
+        else:
+            self.monitor = None
+            self.model_selector = None
+        
     def _load_api_key(self) -> Optional[str]:
         """Load API key from system keyring"""
         return keyring.get_password(KEYRING_SERVICE, "openrouter_api_key")
@@ -439,8 +457,15 @@ class AIAssistant:
         
         # Try cloud models first (if configured)
         if self.client:
-            # Try all available cloud models
-            models_to_try = [model['id'] for model in FREE_MODELS]
+            # Get optimal model sequence using smart selector
+            if self.model_selector:
+                models_to_try = self.model_selector.get_fallback_sequence()
+                if not models_to_try:
+                    # Fall back to default order
+                    models_to_try = [model['id'] for model in FREE_MODELS]
+            else:
+                # Use default order if monitoring not available
+                models_to_try = [model['id'] for model in FREE_MODELS]
             
             for attempt, model in enumerate(models_to_try):
                 # Check if this model is already at limit
@@ -458,14 +483,31 @@ class AIAssistant:
                 else:
                     messages = [{"role": "user", "content": prompt}]
                     
-                # Make API request
+                # Make API request with timing
+                start_time = time.time()
                 print(f"☁️  Using cloud model: {model}")
                 response = self.client.chat_completion(model, messages)
+                latency_ms = (time.time() - start_time) * 1000
                 
                 # Handle rate limit - try next model
                 if "error" in response:
-                    if response.get("error") == "rate_limit" or response.get("status_code") == 429:
+                    error_type = response.get("error")
+                    
+                    # Record failure in monitor
+                    if self.monitor:
+                        self.monitor.record_request(
+                            model, 
+                            success=False, 
+                            latency_ms=latency_ms,
+                            error_type=error_type,
+                            error_message=response.get("message", "")
+                        )
+                    
+                    if error_type == "rate_limit" or response.get("status_code") == 429:
                         print(f"⚠️  Rate limit hit for {model}")
+                        if self.model_selector:
+                            self.model_selector.mark_failure(model, "rate_limit")
+                        
                         if attempt < len(models_to_try) - 1:
                             print(f"🔄 Trying next cloud model...")
                             time.sleep(1)
@@ -485,11 +527,29 @@ class AIAssistant:
                     content = response['choices'][0]['message']['content']
                     tokens_used = response['usage']['total_tokens']
                     
+                    # Record success in monitor
+                    if self.monitor:
+                        self.monitor.record_request(
+                            model, 
+                            success=True, 
+                            latency_ms=latency_ms,
+                            tokens_used=tokens_used
+                        )
+                    
                     # Record usage
                     self.token_manager.record_usage(model, tokens_used, 0.0)
                     
                     return content
                 except (KeyError, IndexError) as e:
+                    # Record parsing failure
+                    if self.monitor:
+                        self.monitor.record_request(
+                            model, 
+                            success=False, 
+                            latency_ms=latency_ms,
+                            error_type="parsing_error",
+                            error_message=str(e)
+                        )
                     return f"❌ Unexpected response format: {e}"
         
         # Try Ollama (local models) as fallback
@@ -614,6 +674,38 @@ class AIAssistant:
             print(f"   Best For: {model['best_for']}")
             print(f"   Today's Usage: {requests}/{model['daily_limit']} ({usage_pct:.1f}%)")
             print()
+    
+    def show_rankings(self):
+        """Show model rankings based on performance monitoring"""
+        if not self.monitor:
+            print("❌ Model monitoring not available. Run: pip install -e .")
+            return
+            
+        # Get today's usage
+        today_usage = {}
+        for model in FREE_MODELS:
+            model_id = model['id']
+            requests, tokens = self.token_manager.get_today_usage(model_id)
+            today_usage[model_id] = (requests, tokens)
+        
+        self.monitor.print_model_rankings(FREE_MODELS, today_usage)
+    
+    def show_recommendation(self):
+        """Show recommended model based on current conditions"""
+        if not self.monitor:
+            print("❌ Model monitoring not available. Run: pip install -e .")
+            return
+            
+        # Get today's usage
+        today_usage = {}
+        for model in FREE_MODELS:
+            model_id = model['id']
+            requests, tokens = self.token_manager.get_today_usage(model_id)
+            today_usage[model_id] = (requests, tokens)
+        
+        print()
+        print(self.monitor.get_recommendation(FREE_MODELS, today_usage))
+        print()
             
     def interactive_chat(self, use_context: bool = True):
         """Start an interactive chat session"""
@@ -663,6 +755,12 @@ class AIAssistant:
                 elif user_input.lower() == 'models':
                     self.list_models()
                     continue
+                elif user_input.lower() == 'rankings':
+                    self.show_rankings()
+                    continue
+                elif user_input.lower() == 'recommend':
+                    self.show_recommendation()
+                    continue
                 elif user_input.lower() == 'stats':
                     self.show_stats()
                     continue
@@ -671,6 +769,8 @@ class AIAssistant:
                     print("  • exit, quit, bye - Exit chat mode")
                     print("  • context on/off - Toggle GitHub context")
                     print("  • models - Show available models")
+                    print("  • rankings - Show real-time model performance rankings")
+                    print("  • recommend - Get current best model recommendation")
                     print("  • stats - Show usage statistics")
                     print("  • help - Show this help message")
                     print()
@@ -723,6 +823,12 @@ def main():
     # Models command
     subparsers.add_parser("models", help="List available models")
     
+    # Rankings command
+    subparsers.add_parser("rankings", help="Show real-time model performance rankings")
+    
+    # Recommend command
+    subparsers.add_parser("recommend", help="Get best model recommendation")
+    
     args = parser.parse_args()
     
     assistant = AIAssistant()
@@ -741,6 +847,10 @@ def main():
         assistant.show_stats(args.days)
     elif args.command == "models":
         assistant.list_models()
+    elif args.command == "rankings":
+        assistant.show_rankings()
+    elif args.command == "recommend":
+        assistant.show_recommendation()
     else:
         parser.print_help()
 

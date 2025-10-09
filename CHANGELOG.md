@@ -5,6 +5,43 @@ All notable changes to the GitHub CLI AI Assistant will be documented in this fi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-01-XX
+
+### Added - Intelligent Model Monitoring & Dynamic Selection 🎯
+- **Real-time performance monitoring** for all OpenRouter models
+- **Smart model ranking** system based on success rate, latency, and availability
+- **Automatic model selection** - always uses the most reliable, least congested model
+- **Dynamic fallback sequencing** - seamlessly rotates through models when failures occur
+- **Performance tracking database** - SQLite-based monitoring of all API requests
+- **New CLI commands**:
+  - `rankings` - Show real-time model performance rankings
+  - `recommend` - Get best model recommendation based on current conditions
+- **Interactive chat enhancements** - In-chat access to rankings and recommendations
+- **Usage score calculation** - Models scored 0-100 based on error rate, failures, latency, and usage
+- **Comprehensive documentation** - New MODEL_MONITORING.md guide
+- **Demo script** - `demo_model_monitoring.py` to showcase the system
+- **CLI wrapper** - `monitor.sh` for quick access to monitoring commands
+
+### Changed
+- Enhanced `ask()` method to use smart model selector
+- Improved error handling with automatic model rotation on failures
+- Better logging of model performance and selection decisions
+- Updated README.md with monitoring features
+
+### Technical Details
+- New `model_monitor.py` module with `ModelMonitor` and `SmartModelSelector` classes
+- Performance tracking: success/failure rates, latency, consecutive failures
+- Scoring algorithm: Error Rate (40%) + Failures (30%) + Latency (20%) + Usage (10%)
+- Automatic exclusion of models with 3+ consecutive failures
+- Cache-based optimization for reduced database overhead
+
+### Benefits
+- ⚡ Higher success rates by avoiding congested models
+- 🚀 Lower latency through smart model prioritization  
+- 💡 Intelligent resource distribution across multiple models
+- 🔄 Automatic recovery when models become available again
+- 📊 Data-driven selection based on real performance metrics
+
 ## [1.0.0] - 2025-01-09
 
 ### Added

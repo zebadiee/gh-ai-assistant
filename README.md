@@ -4,6 +4,14 @@
 
 ## 🎯 Features
 
+### **🎯 Intelligent Model Monitoring & Dynamic Selection (NEW!)**
+- **Real-time performance tracking**: Monitors success rates, latency, and errors for all models
+- **Smart model ranking**: Scores models based on reliability, speed, and availability
+- **Automatic fallback**: Seamlessly switches to best available model when primary fails
+- **Usage optimization**: Distributes load across multiple models to avoid congestion
+- **Live rankings**: View real-time model performance and get recommendations
+- See [MODEL_MONITORING.md](MODEL_MONITORING.md) for full details
+
 ### **Intelligent Token Management**
 - **Auto-rotation**: Automatically switches between models when approaching 90% usage limits
 - **Usage tracking**: SQLite database records all token consumption with detailed analytics
@@ -66,11 +74,17 @@ Get your free OpenRouter API key at: https://openrouter.ai/keys
 ### Basic Usage
 
 ```bash
-# Ask a question with GitHub context
+# Ask a question with GitHub context (auto-selects best model)
 python gh_ai_core.py ask "How can I optimize this code?"
 
 # Ask without context
 python gh_ai_core.py ask --no-context "Explain async/await in Python"
+
+# View real-time model performance rankings
+python gh_ai_core.py rankings
+
+# Get best model recommendation right now
+python gh_ai_core.py recommend
 
 # View usage statistics
 python gh_ai_core.py stats --days 7
@@ -84,6 +98,8 @@ python gh_ai_core.py models
 ```bash
 # Once installed as gh extension
 gh ai ask "Review this repository structure"
+gh ai rankings      # Show model performance
+gh ai recommend     # Get best model to use
 gh ai stats --days 30
 gh ai models
 ```
