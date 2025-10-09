@@ -30,6 +30,7 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 KEYRING_SERVICE = "gh-ai-assistant"
 
 # Free model prioritization based on OpenRouter
+# Note: Free models have daily limits. Check https://openrouter.ai/models for current availability
 FREE_MODELS = [
     {
         "id": "deepseek/deepseek-r1:free",
@@ -40,19 +41,27 @@ FREE_MODELS = [
         "cost_per_1k_tokens": 0.0
     },
     {
-        "id": "deepseek/deepseek-chat:free",
-        "name": "DeepSeek Chat Free",
+        "id": "google/gemini-2.0-flash-exp:free",
+        "name": "Google Gemini 2.0 Flash Free",
         "daily_limit": 1000,
-        "context_window": 32768,
-        "best_for": "general conversation",
+        "context_window": 1000000,
+        "best_for": "general conversation, fast responses",
         "cost_per_1k_tokens": 0.0
     },
     {
         "id": "mistralai/mistral-7b-instruct:free",
-        "name": "Mistral 7B Free",
+        "name": "Mistral 7B Instruct Free",
         "daily_limit": 1000,
         "context_window": 32768,
         "best_for": "multilingual, efficiency",
+        "cost_per_1k_tokens": 0.0
+    },
+    {
+        "id": "meta-llama/llama-3.2-3b-instruct:free",
+        "name": "Meta Llama 3.2 3B Free",
+        "daily_limit": 1000,
+        "context_window": 131072,
+        "best_for": "general tasks, efficiency",
         "cost_per_1k_tokens": 0.0
     }
 ]
