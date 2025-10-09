@@ -17,6 +17,11 @@ import subprocess
 import keyring
 import requests
 from pathlib import Path
+import time
+
+# Disable SQLite date adapter deprecation warning for Python 3.12+
+sqlite3.register_adapter(datetime, lambda val: val.isoformat())
+sqlite3.register_converter("TIMESTAMP", lambda val: datetime.fromisoformat(val.decode()))
 
 # Configuration
 CONFIG_DIR = Path.home() / ".gh-ai-assistant"
@@ -107,7 +112,7 @@ class TokenManager:
         """Get today's usage for a specific model (requests, tokens)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        today = datetime.now().date()
+        today = datetime.now().date().isoformat()
         cursor.execute('''
             SELECT COUNT(*), COALESCE(SUM(tokens_used), 0)
             FROM usage
@@ -186,6 +191,23 @@ class OpenRouterClient:
             response = requests.post(url, headers=self.headers, json=payload, timeout=60)
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 429:
+                # Rate limit exceeded
+                error_detail = ""
+                try:
+                    error_data = response.json()
+                    error_detail = error_data.get('error', {}).get('message', '')
+                except:
+                    pass
+                return {
+                    "error": "rate_limit",
+                    "status_code": 429,
+                    "message": "Rate limit exceeded for this model",
+                    "detail": error_detail,
+                    "model": model
+                }
+            return {"error": str(e), "status_code": response.status_code}
         except requests.exceptions.RequestException as e:
             return {"error": str(e)}
 
@@ -306,33 +328,58 @@ class AIAssistant:
         if not self.client:
             return "❌ No API key configured. Run 'setup' first."
             
-        # Get optimal model
-        model = self.token_manager.get_optimal_model()
+        # Try all available models if rate limited
+        models_to_try = [model['id'] for model in FREE_MODELS]
         
-        # Prepare messages
-        if use_context:
-            messages = self.enhance_prompt_with_context(prompt)
-        else:
-            messages = [{"role": "user", "content": prompt}]
+        for attempt, model in enumerate(models_to_try):
+            # Check if this model is already at limit
+            requests, tokens = self.token_manager.get_today_usage(model)
+            model_info = next((m for m in FREE_MODELS if m['id'] == model), None)
             
-        # Make API request
-        print(f"🤖 Using model: {model}")
-        response = self.client.chat_completion(model, messages)
+            if model_info and requests >= model_info['daily_limit']:
+                if attempt == 0:
+                    print(f"⚠️  {model} is at daily limit ({requests}/{model_info['daily_limit']})")
+                continue
+            
+            # Prepare messages
+            if use_context:
+                messages = self.enhance_prompt_with_context(prompt)
+            else:
+                messages = [{"role": "user", "content": prompt}]
+                
+            # Make API request
+            print(f"🤖 Using model: {model}")
+            response = self.client.chat_completion(model, messages)
+            
+            # Handle rate limit - try next model
+            if "error" in response:
+                if response.get("error") == "rate_limit" or response.get("status_code") == 429:
+                    print(f"⚠️  Rate limit hit for {model}")
+                    if attempt < len(models_to_try) - 1:
+                        print(f"🔄 Trying next model...")
+                        time.sleep(1)  # Brief pause before retry
+                        continue
+                    else:
+                        return (f"❌ All models have hit their rate limits.\n"
+                               f"   The free tier allows 1000 requests per model per day.\n"
+                               f"   Please try again later or check your usage with 'stats' command.\n"
+                               f"   For more details visit: https://openrouter.ai/models")
+                else:
+                    return f"❌ Error: {response.get('error', 'Unknown error')}"
+                
+            # Extract response
+            try:
+                content = response['choices'][0]['message']['content']
+                tokens_used = response['usage']['total_tokens']
+                
+                # Record usage
+                self.token_manager.record_usage(model, tokens_used, 0.0)
+                
+                return content
+            except (KeyError, IndexError) as e:
+                return f"❌ Unexpected response format: {e}"
         
-        if "error" in response:
-            return f"❌ Error: {response['error']}"
-            
-        # Extract response
-        try:
-            content = response['choices'][0]['message']['content']
-            tokens_used = response['usage']['total_tokens']
-            
-            # Record usage
-            self.token_manager.record_usage(model, tokens_used, 0.0)
-            
-            return content
-        except (KeyError, IndexError) as e:
-            return f"❌ Unexpected response format: {e}"
+        return "❌ No available models. All have reached their rate limits."
             
     def show_stats(self, days: int = 7):
         """Display usage statistics"""
