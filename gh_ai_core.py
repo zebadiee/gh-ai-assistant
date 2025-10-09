@@ -2,6 +2,7 @@
 """
 GitHub CLI AI Assistant Core Module
 Production-ready AI assistant with intelligent token management and free model optimization.
+Supports both cloud (OpenRouter) and local (Ollama) AI models.
 """
 
 import os
@@ -65,6 +66,87 @@ FREE_MODELS = [
         "cost_per_1k_tokens": 0.0
     }
 ]
+
+# Local Ollama models (unlimited usage!)
+OLLAMA_MODELS = [
+    {
+        "id": "deepseek-r1:1.5b",
+        "name": "DeepSeek R1 1.5B (Local)",
+        "daily_limit": float('inf'),  # Unlimited!
+        "context_window": 131072,
+        "best_for": "reasoning, code (runs locally)",
+        "cost_per_1k_tokens": 0.0,
+        "local": True
+    },
+    {
+        "id": "llama3.2",
+        "name": "Llama 3.2 3B (Local)",
+        "daily_limit": float('inf'),  # Unlimited!
+        "context_window": 131072,
+        "best_for": "general tasks (runs locally)",
+        "cost_per_1k_tokens": 0.0,
+        "local": True
+    }
+]
+
+
+class OllamaClient:
+    """Client for local Ollama models"""
+    
+    def __init__(self):
+        self.base_url = "http://localhost:11434"
+        
+    def is_available(self) -> bool:
+        """Check if Ollama is running"""
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=2)
+            return response.status_code == 200
+        except:
+            return False
+            
+    def list_models(self) -> List[str]:
+        """List available local models"""
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                return [model['name'] for model in data.get('models', [])]
+            return []
+        except:
+            return []
+            
+    def chat_completion(self, model: str, messages: List[Dict]) -> Dict:
+        """Send chat completion to Ollama"""
+        try:
+            # Convert messages to Ollama format (just the last message for now)
+            prompt = messages[-1]['content'] if messages else ""
+            
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": data.get('response', '')
+                        }
+                    }],
+                    "usage": {
+                        "total_tokens": len(data.get('response', '').split())  # Rough estimate
+                    }
+                }
+            else:
+                return {"error": f"Ollama error: {response.status_code}"}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 @dataclass
@@ -277,7 +359,9 @@ class AIAssistant:
         self.token_manager = TokenManager()
         self.api_key = self._load_api_key()
         self.client = OpenRouterClient(self.api_key) if self.api_key else None
+        self.ollama_client = OllamaClient()
         self.github_context = GitHubContextExtractor()
+        self.use_ollama_fallback = True  # Enable local fallback by default
         
     def _load_api_key(self) -> Optional[str]:
         """Load API key from system keyring"""
@@ -351,71 +435,140 @@ class AIAssistant:
         return messages
         
     def ask(self, prompt: str, use_context: bool = True) -> str:
-        """Ask the AI assistant a question"""
-        if not self.client:
-            return "❌ No API key configured. Run 'setup' first."
-            
-        # Try all available models if rate limited
-        models_to_try = [model['id'] for model in FREE_MODELS]
+        """Ask the AI assistant a question with cloud and local fallback"""
         
-        for attempt, model in enumerate(models_to_try):
-            # Check if this model is already at limit
-            requests, tokens = self.token_manager.get_today_usage(model)
-            model_info = next((m for m in FREE_MODELS if m['id'] == model), None)
+        # Try cloud models first (if configured)
+        if self.client:
+            # Try all available cloud models
+            models_to_try = [model['id'] for model in FREE_MODELS]
             
-            if model_info and requests >= model_info['daily_limit']:
-                if attempt == 0:
-                    print(f"⚠️  {model} is at daily limit ({requests}/{model_info['daily_limit']})")
-                continue
-            
-            # Prepare messages
-            if use_context:
-                messages = self.enhance_prompt_with_context(prompt)
-            else:
-                messages = [{"role": "user", "content": prompt}]
+            for attempt, model in enumerate(models_to_try):
+                # Check if this model is already at limit
+                requests, tokens = self.token_manager.get_today_usage(model)
+                model_info = next((m for m in FREE_MODELS if m['id'] == model), None)
                 
-            # Make API request
-            print(f"🤖 Using model: {model}")
-            response = self.client.chat_completion(model, messages)
-            
-            # Handle rate limit - try next model
-            if "error" in response:
-                if response.get("error") == "rate_limit" or response.get("status_code") == 429:
-                    print(f"⚠️  Rate limit hit for {model}")
-                    if attempt < len(models_to_try) - 1:
-                        print(f"🔄 Trying next model...")
-                        time.sleep(1)  # Brief pause before retry
-                        continue
-                    else:
-                        return (f"❌ All models have hit their rate limits.\n\n"
-                               f"🔍 Common Cause: OpenRouter 'Model Training' setting\n"
-                               f"   ⚠️  Even with credits, free models require this setting!\n\n"
-                               f"✅ Fix (takes 30 seconds):\n"
-                               f"   1. Visit: https://openrouter.ai/settings/privacy\n"
-                               f"   2. Enable 'Model Training'\n"
-                               f"   3. Save settings\n\n"
-                               f"📊 Your usage today: Run 'python gh_ai_core.py models'\n"
-                               f"📖 Full guide: See OPENROUTER_SETUP.md\n\n"
-                               f"Other options:\n"
-                               f"   • Add credits: https://openrouter.ai/credits\n"
-                               f"   • Wait for daily reset (midnight UTC)\n"
-                               f"   • Use local models (Ollama) - unlimited & free!")
+                if model_info and requests >= model_info['daily_limit']:
+                    if attempt == 0:
+                        print(f"⚠️  {model} is at daily limit ({requests}/{model_info['daily_limit']})")
+                    continue
+                
+                # Prepare messages
+                if use_context:
+                    messages = self.enhance_prompt_with_context(prompt)
                 else:
-                    return f"❌ Error: {response.get('error', 'Unknown error')}"
+                    messages = [{"role": "user", "content": prompt}]
+                    
+                # Make API request
+                print(f"☁️  Using cloud model: {model}")
+                response = self.client.chat_completion(model, messages)
                 
-            # Extract response
-            try:
-                content = response['choices'][0]['message']['content']
-                tokens_used = response['usage']['total_tokens']
-                
-                # Record usage
-                self.token_manager.record_usage(model, tokens_used, 0.0)
-                
-                return content
-            except (KeyError, IndexError) as e:
-                return f"❌ Unexpected response format: {e}"
+                # Handle rate limit - try next model
+                if "error" in response:
+                    if response.get("error") == "rate_limit" or response.get("status_code") == 429:
+                        print(f"⚠️  Rate limit hit for {model}")
+                        if attempt < len(models_to_try) - 1:
+                            print(f"🔄 Trying next cloud model...")
+                            time.sleep(1)
+                            continue
+                        else:
+                            # All cloud models exhausted, try local
+                            if self.use_ollama_fallback:
+                                print(f"☁️  All cloud models rate limited. Trying local models...")
+                                break
+                            else:
+                                return self._rate_limit_error_message()
+                    else:
+                        return f"❌ Error: {response.get('error', 'Unknown error')}"
+                    
+                # Extract response
+                try:
+                    content = response['choices'][0]['message']['content']
+                    tokens_used = response['usage']['total_tokens']
+                    
+                    # Record usage
+                    self.token_manager.record_usage(model, tokens_used, 0.0)
+                    
+                    return content
+                except (KeyError, IndexError) as e:
+                    return f"❌ Unexpected response format: {e}"
         
-        return "❌ No available models. All have reached their rate limits."
+        # Try Ollama (local models) as fallback
+        if self.use_ollama_fallback and self.ollama_client.is_available():
+            return self._try_ollama(prompt, use_context)
+        elif self.use_ollama_fallback:
+            return (f"❌ All cloud models rate limited and Ollama not available.\n\n"
+                   f"💡 Install Ollama for unlimited local AI:\n"
+                   f"   brew install ollama\n"
+                   f"   ollama pull deepseek-r1:1.5b\n"
+                   f"   ollama serve\n\n"
+                   f"Or fix OpenRouter - see OPENROUTER_SETUP.md")
+        else:
+            return self._rate_limit_error_message()
+    
+    def _try_ollama(self, prompt: str, use_context: bool) -> str:
+        """Try local Ollama models"""
+        available_models = self.ollama_client.list_models()
+        
+        # Prefer models we know about
+        preferred_models = ["deepseek-r1:1.5b", "llama3.2", "llama3.2:latest"]
+        
+        # Try preferred models first
+        for model_id in preferred_models:
+            if any(model_id in m for m in available_models):
+                actual_model = next((m for m in available_models if model_id in m), model_id)
+                print(f"🏠 Using local model: {actual_model}")
+                
+                messages = [{"role": "user", "content": prompt}]
+                if use_context:
+                    messages = self.enhance_prompt_with_context(prompt)
+                else:
+                    messages = [{"role": "user", "content": prompt}]
+                    
+                response = self.ollama_client.chat_completion(actual_model, messages)
+                
+                if "error" not in response:
+                    try:
+                        content = response['choices'][0]['message']['content']
+                        tokens_used = response['usage']['total_tokens']
+                        self.token_manager.record_usage(f"ollama:{actual_model}", tokens_used, 0.0)
+                        return content
+                    except (KeyError, IndexError):
+                        continue
+        
+        # Try any available model
+        if available_models:
+            model = available_models[0]
+            print(f"🏠 Using local model: {model}")
+            messages = [{"role": "user", "content": prompt}]
+            response = self.ollama_client.chat_completion(model, messages)
+            
+            if "error" not in response:
+                try:
+                    content = response['choices'][0]['message']['content']
+                    return content
+                except (KeyError, IndexError):
+                    pass
+        
+        return (f"❌ No local models available.\n\n"
+               f"Install Ollama models:\n"
+               f"   ollama pull deepseek-r1:1.5b\n"
+               f"   ollama pull llama3.2")
+    
+    def _rate_limit_error_message(self) -> str:
+        """Return formatted rate limit error message"""
+        return (f"❌ All models have hit their rate limits.\n\n"
+               f"🔍 Common Cause: OpenRouter 'Model Training' setting\n"
+               f"   ⚠️  Even with credits, free models require this setting!\n\n"
+               f"✅ Fix (takes 30 seconds):\n"
+               f"   1. Visit: https://openrouter.ai/settings/privacy\n"
+               f"   2. Enable 'Model Training'\n"
+               f"   3. Save settings\n\n"
+               f"📊 Your usage today: Run 'python gh_ai_core.py models'\n"
+               f"📖 Full guide: See OPENROUTER_SETUP.md\n\n"
+               f"Other options:\n"
+               f"   • Add credits: https://openrouter.ai/credits\n"
+               f"   • Wait for daily reset (midnight UTC)\n"
+               f"   • Use local models (Ollama) - unlimited & free!")
             
     def show_stats(self, days: int = 7):
         """Display usage statistics"""
