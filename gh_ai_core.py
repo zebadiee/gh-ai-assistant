@@ -434,6 +434,83 @@ class AIAssistant:
             print(f"   Best For: {model['best_for']}")
             print(f"   Today's Usage: {requests}/{model['daily_limit']} ({usage_pct:.1f}%)")
             print()
+            
+    def interactive_chat(self, use_context: bool = True):
+        """Start an interactive chat session"""
+        print("╔══════════════════════════════════════════════════════════════════════╗")
+        print("║                                                                      ║")
+        print("║              🤖 GitHub CLI AI Assistant - Chat Mode                 ║")
+        print("║                                                                      ║")
+        print("╚══════════════════════════════════════════════════════════════════════╝")
+        print()
+        print("💬 Interactive chat mode started!")
+        print(f"📍 Context: {'GitHub repo context included' if use_context else 'No context (general questions)'}")
+        print()
+        print("Commands:")
+        print("  • Type your question and press Enter")
+        print("  • Type 'exit', 'quit', or 'bye' to exit")
+        print("  • Type 'context on' or 'context off' to toggle GitHub context")
+        print("  • Type 'models' to see available models")
+        print("  • Type 'stats' to see usage statistics")
+        print()
+        print("─" * 70)
+        print()
+        
+        conversation_history = []
+        
+        while True:
+            try:
+                # Get user input
+                user_input = input("You: ").strip()
+                
+                if not user_input:
+                    continue
+                    
+                # Check for exit commands
+                if user_input.lower() in ['exit', 'quit', 'bye', 'q']:
+                    print("\n👋 Thanks for chatting! Goodbye!")
+                    break
+                    
+                # Check for special commands
+                if user_input.lower() == 'context on':
+                    use_context = True
+                    print("✅ GitHub context enabled")
+                    continue
+                elif user_input.lower() == 'context off':
+                    use_context = False
+                    print("✅ GitHub context disabled")
+                    continue
+                elif user_input.lower() == 'models':
+                    self.list_models()
+                    continue
+                elif user_input.lower() == 'stats':
+                    self.show_stats()
+                    continue
+                elif user_input.lower() in ['help', '?']:
+                    print("\n💡 Available commands:")
+                    print("  • exit, quit, bye - Exit chat mode")
+                    print("  • context on/off - Toggle GitHub context")
+                    print("  • models - Show available models")
+                    print("  • stats - Show usage statistics")
+                    print("  • help - Show this help message")
+                    print()
+                    continue
+                
+                # Get AI response
+                print("AI: ", end="", flush=True)
+                response = self.ask(user_input, use_context)
+                print(response)
+                print()
+                
+            except KeyboardInterrupt:
+                print("\n\n👋 Chat interrupted. Goodbye!")
+                break
+            except EOFError:
+                print("\n\n👋 End of input. Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+                print("Continuing chat...\n")
 
 
 def main():
@@ -446,6 +523,11 @@ def main():
     
     # Setup command
     subparsers.add_parser("setup", help="Configure API keys")
+    
+    # Chat command (interactive mode)
+    chat_parser = subparsers.add_parser("chat", help="Start interactive chat mode")
+    chat_parser.add_argument("--no-context", action="store_true", 
+                           help="Don't include GitHub context")
     
     # Ask command
     ask_parser = subparsers.add_parser("ask", help="Ask the AI assistant a question")
@@ -467,6 +549,9 @@ def main():
     
     if args.command == "setup":
         assistant.setup_api_key()
+    elif args.command == "chat":
+        use_context = not args.no_context
+        assistant.interactive_chat(use_context)
     elif args.command == "ask":
         prompt = " ".join(args.prompt)
         use_context = not args.no_context
