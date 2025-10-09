@@ -51,6 +51,16 @@ python gh_ai_core.py setup
 gh ai setup
 ```
 
+**⚠️ CRITICAL: Enable Model Training**
+
+After getting your API key, you **must** enable "Model Training" in OpenRouter settings:
+
+1. Visit: https://openrouter.ai/settings/privacy
+2. Enable "Model Training" toggle
+3. Save settings
+
+**Without this, you'll get rate limits even with credits!** See [OPENROUTER_SETUP.md](OPENROUTER_SETUP.md) for details.
+
 Get your free OpenRouter API key at: https://openrouter.ai/keys
 
 ### Basic Usage

@@ -289,12 +289,25 @@ class AIAssistant:
         
     def setup_api_key(self):
         """Interactive API key setup"""
-        print("🔐 GitHub CLI AI Assistant Setup")
+        print("╔══════════════════════════════════════════════════════════════════════╗")
+        print("║                                                                      ║")
+        print("║          🔐 GitHub CLI AI Assistant - Setup                         ║")
+        print("║                                                                      ║")
+        print("╚══════════════════════════════════════════════════════════════════════╝")
         print("\nTo use this assistant, you need an OpenRouter API key.")
-        print("Get your free API key at: https://openrouter.ai/keys")
+        print("\n📍 Step 1: Get API Key")
+        print("   Visit: https://openrouter.ai/keys")
+        print("\n📍 Step 2: ⚠️  CRITICAL - Enable Model Training (Required for Free Models)")
+        print("   Visit: https://openrouter.ai/settings/privacy")
+        print("   Turn ON 'Model Training'")
+        print("   → Without this, you'll get rate limits even with credits!")
+        print("\n📍 Step 3: (Optional) Add Credits for Higher Limits")
+        print("   Visit: https://openrouter.ai/credits")
         print("\nOpenRouter provides FREE access to:")
         for model in FREE_MODELS:
             print(f"  • {model['name']} ({model['daily_limit']} requests/day)")
+        print("\n⚠️  Important: Free models require 'Model Training' to be enabled!")
+        print("   See OPENROUTER_SETUP.md for complete instructions.")
         
         api_key = input("\nEnter your OpenRouter API key: ").strip()
         
@@ -303,6 +316,11 @@ class AIAssistant:
             self.api_key = api_key
             self.client = OpenRouterClient(api_key)
             print("\n✅ API key saved successfully!")
+            print("\n⚠️  NEXT STEPS:")
+            print("   1. Enable 'Model Training': https://openrouter.ai/settings/privacy")
+            print("   2. Verify it's ON (required for free models)")
+            print("   3. Test with: python gh_ai_core.py ask 'Hello!'")
+            print("\n📖 Full setup guide: See OPENROUTER_SETUP.md")
         else:
             print("\n❌ No API key provided.")
             
@@ -369,10 +387,19 @@ class AIAssistant:
                         time.sleep(1)  # Brief pause before retry
                         continue
                     else:
-                        return (f"❌ All models have hit their rate limits.\n"
-                               f"   The free tier allows 1000 requests per model per day.\n"
-                               f"   Please try again later or check your usage with 'stats' command.\n"
-                               f"   For more details visit: https://openrouter.ai/models")
+                        return (f"❌ All models have hit their rate limits.\n\n"
+                               f"🔍 Common Cause: OpenRouter 'Model Training' setting\n"
+                               f"   ⚠️  Even with credits, free models require this setting!\n\n"
+                               f"✅ Fix (takes 30 seconds):\n"
+                               f"   1. Visit: https://openrouter.ai/settings/privacy\n"
+                               f"   2. Enable 'Model Training'\n"
+                               f"   3. Save settings\n\n"
+                               f"📊 Your usage today: Run 'python gh_ai_core.py models'\n"
+                               f"📖 Full guide: See OPENROUTER_SETUP.md\n\n"
+                               f"Other options:\n"
+                               f"   • Add credits: https://openrouter.ai/credits\n"
+                               f"   • Wait for daily reset (midnight UTC)\n"
+                               f"   • Use local models (Ollama) - unlimited & free!")
                 else:
                     return f"❌ Error: {response.get('error', 'Unknown error')}"
                 
