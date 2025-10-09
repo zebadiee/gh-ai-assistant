@@ -525,7 +525,23 @@ class AIAssistant:
                 # Extract response
                 try:
                     content = response['choices'][0]['message']['content']
-                    tokens_used = response['usage']['total_tokens']
+                    tokens_used = response.get('usage', {}).get('total_tokens', 0)
+                    
+                    # Check for empty content
+                    if not content or not content.strip():
+                        print(f"⚠️  Empty response from {model}, trying next...")
+                        if self.monitor:
+                            self.monitor.record_request(
+                                model, 
+                                success=False, 
+                                latency_ms=latency_ms,
+                                error_type="empty_response",
+                                error_message="Model returned empty content"
+                            )
+                        if attempt < len(models_to_try) - 1:
+                            continue
+                        else:
+                            return "❌ All models returned empty responses"
                     
                     # Record success in monitor
                     if self.monitor:
@@ -542,6 +558,7 @@ class AIAssistant:
                     return content
                 except (KeyError, IndexError) as e:
                     # Record parsing failure
+                    print(f"⚠️  Failed to parse response from {model}: {e}")
                     if self.monitor:
                         self.monitor.record_request(
                             model, 
@@ -550,7 +567,13 @@ class AIAssistant:
                             error_type="parsing_error",
                             error_message=str(e)
                         )
-                    return f"❌ Unexpected response format: {e}"
+                    
+                    # Try next model
+                    if attempt < len(models_to_try) - 1:
+                        print(f"🔄 Trying next cloud model...")
+                        continue
+                    else:
+                        return f"❌ Failed to get valid response from any model. Last error: {e}"
         
         # Try Ollama (local models) as fallback
         if self.use_ollama_fallback and self.ollama_client.is_available():
