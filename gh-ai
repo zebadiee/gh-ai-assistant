@@ -1,0 +1,8 @@
+#!/bin/bash
+# GitHub CLI extension entry point for gh-ai-assistant
+
+# This script allows the assistant to be used as a GitHub CLI extension
+# Install with: gh extension install .
+# Use with: gh ai <command>
+
+python3 "$(dirname "$0")/gh_ai_core.py" "$@"
