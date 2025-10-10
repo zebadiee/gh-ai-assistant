@@ -20,13 +20,30 @@ import requests
 from pathlib import Path
 import time
 
-# Import model monitoring
+# Import model monitoring and conversation storage
 try:
     from model_monitor import ModelMonitor, SmartModelSelector
     MONITORING_AVAILABLE = True
 except ImportError:
     MONITORING_AVAILABLE = False
-    print("⚠️  Model monitoring not available. Install with: pip install -e .")
+
+try:
+    from model_refresh import refresh_free_models, get_free_models
+    MODEL_REFRESH_AVAILABLE = True
+except ImportError:
+    MODEL_REFRESH_AVAILABLE = False
+
+try:
+    from conversation_store import ConversationStore, Message
+    CONVERSATION_STORE_AVAILABLE = True
+except ImportError:
+    CONVERSATION_STORE_AVAILABLE = False
+
+try:
+    from startup_init import quick_init
+    STARTUP_INIT_AVAILABLE = True
+except ImportError:
+    STARTUP_INIT_AVAILABLE = False
 
 # Disable SQLite date adapter deprecation warning for Python 3.12+
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
@@ -381,6 +398,16 @@ class AIAssistant:
             self.monitor = None
             self.model_selector = None
         
+        # Initialize conversation storage
+        if CONVERSATION_STORE_AVAILABLE:
+            self.conversation_store = ConversationStore()
+            self.current_session_id = self.conversation_store.get_active_session()
+            if not self.current_session_id:
+                self.current_session_id = self.conversation_store.create_session()
+        else:
+            self.conversation_store = None
+            self.current_session_id = None
+        
     def _load_api_key(self) -> Optional[str]:
         """Load API key from system keyring"""
         return keyring.get_password(KEYRING_SERVICE, "openrouter_api_key")
@@ -555,6 +582,36 @@ class AIAssistant:
                     # Record usage
                     self.token_manager.record_usage(model, tokens_used, 0.0)
                     
+                    # Save to conversation history
+                    if self.conversation_store and self.current_session_id:
+                        try:
+                            # Save user message
+                            self.conversation_store.add_message(
+                                self.current_session_id,
+                                Message(
+                                    role="user",
+                                    content=prompt,
+                                    timestamp=datetime.now(),
+                                    model_used=None,
+                                    tokens_used=0
+                                )
+                            )
+                            # Save assistant response
+                            self.conversation_store.add_message(
+                                self.current_session_id,
+                                Message(
+                                    role="assistant",
+                                    content=content,
+                                    timestamp=datetime.now(),
+                                    model_used=model,
+                                    tokens_used=tokens_used
+                                )
+                            )
+                        except Exception as e:
+                            # Don't fail the request if conversation storage fails
+                            if self.monitor:
+                                print(f"⚠️  Failed to save conversation: {e}")
+                    
                     return content
                 except (KeyError, IndexError) as e:
                     # Record parsing failure
@@ -614,6 +671,27 @@ class AIAssistant:
                         content = response['choices'][0]['message']['content']
                         tokens_used = response['usage']['total_tokens']
                         self.token_manager.record_usage(f"ollama:{actual_model}", tokens_used, 0.0)
+                        
+                        # Save to conversation history
+                        if self.conversation_store and self.current_session_id:
+                            try:
+                                self.conversation_store.add_message(
+                                    self.current_session_id,
+                                    Message(role="user", content=prompt, timestamp=datetime.now())
+                                )
+                                self.conversation_store.add_message(
+                                    self.current_session_id,
+                                    Message(
+                                        role="assistant",
+                                        content=content,
+                                        timestamp=datetime.now(),
+                                        model_used=f"ollama:{actual_model}",
+                                        tokens_used=tokens_used
+                                    )
+                                )
+                            except:
+                                pass  # Don't fail on storage error
+                        
                         return content
                     except (KeyError, IndexError):
                         continue
@@ -818,6 +896,10 @@ class AIAssistant:
 
 def main():
     """Main CLI entry point"""
+    # Run startup initialization (quick mode - no verbose output by default)
+    if STARTUP_INIT_AVAILABLE:
+        quick_init(verbose=False)
+    
     parser = argparse.ArgumentParser(
         description="GitHub CLI AI Assistant with intelligent token management"
     )
