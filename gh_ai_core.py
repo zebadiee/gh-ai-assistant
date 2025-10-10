@@ -45,6 +45,12 @@ try:
 except ImportError:
     STARTUP_INIT_AVAILABLE = False
 
+try:
+    from memory_transfer import MemoryTransferManager, ConversationMemory
+    MEMORY_TRANSFER_AVAILABLE = True
+except ImportError:
+    MEMORY_TRANSFER_AVAILABLE = False
+
 # Disable SQLite date adapter deprecation warning for Python 3.12+
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 sqlite3.register_converter("TIMESTAMP", lambda val: datetime.fromisoformat(val.decode()))
@@ -408,6 +414,17 @@ class AIAssistant:
             self.conversation_store = None
             self.current_session_id = None
         
+        # Initialize memory transfer system
+        if MEMORY_TRANSFER_AVAILABLE:
+            self.memory_manager = MemoryTransferManager()
+        else:
+            self.memory_manager = None
+        
+        # Track conversation for handoffs
+        self.conversation_history = []
+        self.current_model = None
+        self.current_token_count = 0
+        
     def _load_api_key(self) -> Optional[str]:
         """Load API key from system keyring"""
         return keyring.get_password(KEYRING_SERVICE, "openrouter_api_key")
@@ -482,6 +499,41 @@ class AIAssistant:
     def ask(self, prompt: str, use_context: bool = True) -> str:
         """Ask the AI assistant a question with cloud and local fallback"""
         
+        # Check if we need to handoff to a different model
+        if self.memory_manager and self.current_model and self.current_token_count > 0:
+            should_handoff, predicted_total, reason = self.memory_manager.should_handoff(
+                self.current_model, self.current_token_count, prompt
+            )
+            
+            if should_handoff:
+                print(f"\n🔄 Intelligent Handoff Triggered")
+                print(f"   Reason: {reason}")
+                
+                # Determine best next model
+                next_model = self._select_next_model_for_handoff()
+                
+                if next_model and next_model != self.current_model:
+                    # Execute handoff with memory transfer
+                    transfer_prompt, handoff_context = self.memory_manager.execute_handoff(
+                        from_model=self.current_model,
+                        to_model=next_model,
+                        current_tokens=self.current_token_count,
+                        predicted_tokens=predicted_total,
+                        conversation_history=self.conversation_history,
+                        new_prompt=prompt
+                    )
+                    
+                    print(f"   Transferring to: {next_model}")
+                    print(f"   Memory compressed: {self.memory_manager.count_tokens(transfer_prompt.split('[CONTEXT:')[1].split(']')[0]) if '[CONTEXT:' in transfer_prompt else 0} tokens")
+                    print()
+                    
+                    # Use transfer prompt instead of original
+                    prompt = transfer_prompt
+                    
+                    # Reset token count for new model
+                    self.current_token_count = self.memory_manager.count_tokens(prompt)
+                    self.current_model = next_model
+        
         # Try cloud models first (if configured)
         if self.client:
             # Get optimal model sequence using smart selector
@@ -515,6 +567,9 @@ class AIAssistant:
                 print(f"☁️  Using cloud model: {model}")
                 response = self.client.chat_completion(model, messages)
                 latency_ms = (time.time() - start_time) * 1000
+                
+                # Track current model
+                self.current_model = model
                 
                 # Handle rate limit - try next model
                 if "error" in response:
@@ -581,6 +636,17 @@ class AIAssistant:
                     
                     # Record usage
                     self.token_manager.record_usage(model, tokens_used, 0.0)
+                    
+                    # Update token count for handoff tracking
+                    self.current_token_count += tokens_used
+                    
+                    # Track conversation for memory transfer
+                    self.conversation_history.append({"role": "user", "content": prompt})
+                    self.conversation_history.append({"role": "assistant", "content": content})
+                    
+                    # Keep only last 20 messages to prevent memory bloat
+                    if len(self.conversation_history) > 20:
+                        self.conversation_history = self.conversation_history[-20:]
                     
                     # Save to conversation history
                     if self.conversation_store and self.current_session_id:
@@ -730,6 +796,40 @@ class AIAssistant:
                f"   • Add credits: https://openrouter.ai/credits\n"
                f"   • Wait for daily reset (midnight UTC)\n"
                f"   • Use local models (Ollama) - unlimited & free!")
+    
+    def _select_next_model_for_handoff(self) -> Optional[str]:
+        """Select the best model for handoff based on context window and availability"""
+        if not self.memory_manager:
+            return None
+        
+        # Prefer models with larger context windows for handoffs
+        # Sort by context window size (largest first)
+        available_models = []
+        
+        for model in FREE_MODELS:
+            model_id = model['id']
+            requests, tokens = self.token_manager.get_today_usage(model_id)
+            
+            # Skip if at limit
+            if requests >= model['daily_limit']:
+                continue
+            
+            # Get context window
+            context_window = self.memory_manager.get_context_window(model_id)
+            
+            available_models.append({
+                'id': model_id,
+                'context_window': context_window,
+                'requests': requests
+            })
+        
+        # Sort by context window (largest first), then by usage (least used first)
+        available_models.sort(key=lambda x: (-x['context_window'], x['requests']))
+        
+        if available_models:
+            return available_models[0]['id']
+        
+        return None
             
     def show_stats(self, days: int = 7):
         """Display usage statistics"""
@@ -934,6 +1034,9 @@ def main():
     # Recommend command
     subparsers.add_parser("recommend", help="Get best model recommendation")
     
+    # Memory stats command
+    subparsers.add_parser("memory", help="Show memory transfer statistics")
+    
     args = parser.parse_args()
     
     assistant = AIAssistant()
@@ -956,6 +1059,17 @@ def main():
         assistant.show_rankings()
     elif args.command == "recommend":
         assistant.show_recommendation()
+    elif args.command == "memory":
+        if assistant.memory_manager:
+            stats = assistant.memory_manager.get_handoff_stats()
+            print("\n" + "="*70)
+            print("🧠 MEMORY TRANSFER STATISTICS")
+            print("="*70)
+            print(json.dumps(stats, indent=2, default=str))
+            print()
+        else:
+            print("\n❌ Memory transfer system not available")
+            print("   Run: cd gh-ai-assistant && pip install -e .")
     else:
         parser.print_help()
 
