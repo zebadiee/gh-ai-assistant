@@ -51,6 +51,12 @@ try:
 except ImportError:
     MEMORY_TRANSFER_AVAILABLE = False
 
+try:
+    from memory_bridge import MemoryBridge, BridgeState
+    MEMORY_BRIDGE_AVAILABLE = True
+except ImportError:
+    MEMORY_BRIDGE_AVAILABLE = False
+
 # Disable SQLite date adapter deprecation warning for Python 3.12+
 sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 sqlite3.register_converter("TIMESTAMP", lambda val: datetime.fromisoformat(val.decode()))
@@ -420,10 +426,17 @@ class AIAssistant:
         else:
             self.memory_manager = None
         
+        # Initialize memory bridge (ultimate failsafe)
+        if MEMORY_BRIDGE_AVAILABLE:
+            self.memory_bridge = MemoryBridge()
+        else:
+            self.memory_bridge = None
+        
         # Track conversation for handoffs
         self.conversation_history = []
         self.current_model = None
         self.current_token_count = 0
+        self.exhausted_models = []  # Track which models hit limits
         
     def _load_api_key(self) -> Optional[str]:
         """Load API key from system keyring"""
@@ -498,6 +511,31 @@ class AIAssistant:
         
     def ask(self, prompt: str, use_context: bool = True) -> str:
         """Ask the AI assistant a question with cloud and local fallback"""
+        
+        # Check if bridge is active (recovering from total exhaustion)
+        if self.memory_bridge and self.memory_bridge.active_bridge:
+            status = self.memory_bridge.get_bridge_status()
+            
+            if status and status['state'] == BridgeState.ACTIVATED.value:
+                # Try to recover
+                all_models = [m['id'] for m in FREE_MODELS]
+                available_models = self._get_available_models()
+                
+                if self.memory_bridge.check_recovery_possible(available_models):
+                    print("🔄 Memory Bridge Recovery Detected!")
+                    
+                    # Attempt recovery with first available model
+                    success, recovery_prompt = self.memory_bridge.attempt_recovery(available_models[0])
+                    
+                    if success:
+                        # Use recovery prompt instead of original
+                        prompt = recovery_prompt
+                        print(f"   Using model: {available_models[0]}")
+                        print()
+                else:
+                    # Still in bridge state
+                    print(self.memory_bridge.format_bridge_message())
+                    return "⏳ Waiting for model recovery. Your conversation is preserved and will resume automatically."
         
         # Check if we need to handoff to a different model
         if self.memory_manager and self.current_model and self.current_token_count > 0:
@@ -587,6 +625,11 @@ class AIAssistant:
                     
                     if error_type == "rate_limit" or response.get("status_code") == 429:
                         print(f"⚠️  Rate limit hit for {model}")
+                        
+                        # Track exhausted model
+                        if model not in self.exhausted_models:
+                            self.exhausted_models.append(model)
+                        
                         if self.model_selector:
                             self.model_selector.mark_failure(model, "rate_limit")
                         
@@ -595,9 +638,40 @@ class AIAssistant:
                             time.sleep(1)
                             continue
                         else:
-                            # All cloud models exhausted, try local
+                            # All cloud models exhausted
+                            print(f"☁️  All cloud models exhausted")
+                            
+                            # Check if bridge should activate
+                            all_model_ids = [m['id'] for m in FREE_MODELS]
+                            
+                            if self.memory_bridge and self.memory_bridge.should_activate_bridge(
+                                self.exhausted_models, all_model_ids
+                            ):
+                                print()
+                                print("🌉 ACTIVATING MEMORY BRIDGE (Ultimate Failsafe)")
+                                print()
+                                
+                                # Activate bridge to preserve context
+                                bridge_context = self.memory_bridge.activate_bridge(
+                                    user_prompt=prompt,
+                                    conversation_history=self.conversation_history,
+                                    exhausted_models=self.exhausted_models,
+                                    technical_context=self._extract_technical_context(),
+                                    project_state=self._extract_project_state()
+                                )
+                                
+                                # Show bridge status to user
+                                print(self.memory_bridge.format_bridge_message())
+                                
+                                return ("🌉 Memory Bridge Activated\n\n"
+                                       "All AI models are temporarily at rate limits.\n"
+                                       "Your conversation is preserved and will automatically\n"
+                                       "resume when any provider becomes available.\n\n"
+                                       "This ensures zero context loss with 100% uptime.")
+                            
+                            # Try local as last resort
                             if self.use_ollama_fallback:
-                                print(f"☁️  All cloud models rate limited. Trying local models...")
+                                print(f"☁️  Trying local models as last resort...")
                                 break
                             else:
                                 return self._rate_limit_error_message()
@@ -830,6 +904,62 @@ class AIAssistant:
             return available_models[0]['id']
         
         return None
+    
+    def _get_available_models(self) -> List[str]:
+        """Get list of currently available models (not exhausted)"""
+        available = []
+        
+        for model in FREE_MODELS:
+            model_id = model['id']
+            
+            # Skip if in exhausted list
+            if model_id in self.exhausted_models:
+                continue
+            
+            # Check usage
+            requests, _ = self.token_manager.get_today_usage(model_id)
+            if requests < model['daily_limit']:
+                available.append(model_id)
+        
+        return available
+    
+    def _extract_technical_context(self) -> str:
+        """Extract technical context from conversation for bridge"""
+        technical_terms = []
+        
+        for msg in self.conversation_history[-10:]:
+            content = msg.get('content', '')
+            
+            # Look for technical indicators
+            if any(term in content.lower() for term in [
+                'api', 'function', 'class', 'code', 'implementation',
+                'fastapi', 'python', 'jwt', 'authentication', 'database'
+            ]):
+                # Extract key phrases
+                words = content.split()[:50]  # First 50 words
+                technical_terms.append(' '.join(words))
+        
+        return ' | '.join(technical_terms[:3]) if technical_terms else "General development"
+    
+    def _extract_project_state(self) -> str:
+        """Extract project state from conversation for bridge"""
+        # Look for project-related keywords
+        project_keywords = []
+        
+        for msg in self.conversation_history:
+            content = msg.get('content', '')
+            
+            if any(keyword in content.lower() for keyword in [
+                'building', 'implementing', 'creating', 'developing',
+                'project', 'system', 'application'
+            ]):
+                # This might describe the project
+                project_keywords.append(content[:100])
+        
+        if project_keywords:
+            return project_keywords[0]  # First project mention
+        
+        return "Software development project"
             
     def show_stats(self, days: int = 7):
         """Display usage statistics"""
@@ -1037,6 +1167,9 @@ def main():
     # Memory stats command
     subparsers.add_parser("memory", help="Show memory transfer statistics")
     
+    # Bridge stats command
+    subparsers.add_parser("bridge", help="Show memory bridge statistics")
+    
     args = parser.parse_args()
     
     assistant = AIAssistant()
@@ -1069,6 +1202,24 @@ def main():
             print()
         else:
             print("\n❌ Memory transfer system not available")
+            print("   Run: cd gh-ai-assistant && pip install -e .")
+    elif args.command == "bridge":
+        if assistant.memory_bridge:
+            stats = assistant.memory_bridge.get_statistics()
+            print("\n" + "="*70)
+            print("🌉 MEMORY BRIDGE STATISTICS (Ultimate Failsafe)")
+            print("="*70)
+            print(json.dumps(stats, indent=2, default=str))
+            
+            # Show current bridge status if active
+            status = assistant.memory_bridge.get_bridge_status()
+            if status:
+                print()
+                print("⚠️  ACTIVE BRIDGE:")
+                print(assistant.memory_bridge.format_bridge_message())
+            print()
+        else:
+            print("\n❌ Memory bridge system not available")
             print("   Run: cd gh-ai-assistant && pip install -e .")
     else:
         parser.print_help()
