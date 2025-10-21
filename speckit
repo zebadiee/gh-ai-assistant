@@ -10,12 +10,17 @@ else
   exit 1
 fi
 
+# Pop open the friendly guide in your default viewer
+if command -v open >/dev/null 2>&1; then
+  open docs/spec-kit.md >/dev/null 2>&1 || true
+elif command -v xdg-open >/dev/null 2>&1; then
+  xdg-open docs/spec-kit.md >/dev/null 2>&1 || true
+fi
+
 cat <<'MSG'
 
-Next steps:
-  1. Open the command you need in .speckit/commands/ (e.g. /speckit.specify).
-  2. Follow the instructions and paste results into openspec/changes/<change-id>/.
-  3. When finished, run: openspec validate <change-id> --strict
+Docs opened (docs/spec-kit.md). Follow the prompts there and in
+.speckit/commands/, then finish with: openspec validate <change-id> --strict
 
 Happy spec-ing! 🔥
 MSG

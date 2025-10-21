@@ -10,7 +10,9 @@ SpecKit turns planning into a guided conversation. This repo already includes ev
 ./speckit
 ```
 
-The launcher runs the helper and shows what to do next. Under the hood it simply executes:
+Prefer double-clicking? Use `Speckit.command` in Finder—it runs the same helper.
+
+Under the hood the launcher simply executes:
 
 ```bash
 python scripts/speckit_check.py
