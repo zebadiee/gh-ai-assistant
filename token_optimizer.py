@@ -19,12 +19,14 @@ from functools import lru_cache
 import sqlite3
 import tiktoken
 
-# Configuration
-CONFIG_DIR = Path.home() / ".gh-ai-assistant"
-CACHE_DB = CONFIG_DIR / "token_cache.db"
-METRICS_DB = CONFIG_DIR / "token_metrics.db"
-MAX_CACHE_AGE_HOURS = 24
-MAX_WORKERS = 10
+from token_recycler.config import (
+    CONFIG_DIR,
+    TOKEN_CACHE_DB,
+    TOKEN_METRICS_DB,
+    DEFAULT_MAX_CACHE_AGE_HOURS,
+    DEFAULT_MAX_WORKERS,
+    ensure_config_dir,
+)
 
 
 @dataclass
@@ -57,7 +59,7 @@ class CachedResponse:
     timestamp: datetime
     hit_count: int = 0
     
-    def is_valid(self, max_age_hours: int = MAX_CACHE_AGE_HOURS) -> bool:
+    def is_valid(self, max_age_hours: int = DEFAULT_MAX_CACHE_AGE_HOURS) -> bool:
         """Check if cache entry is still valid"""
         age = datetime.now() - self.timestamp
         return age < timedelta(hours=max_age_hours)
@@ -66,13 +68,13 @@ class CachedResponse:
 class TokenCache:
     """Semantic caching system for API responses"""
     
-    def __init__(self, db_path: Path = CACHE_DB):
+    def __init__(self, db_path: Path = TOKEN_CACHE_DB):
         self.db_path = db_path
         self._init_db()
         
     def _init_db(self):
         """Initialize SQLite database for caching"""
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_config_dir()
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -157,7 +159,7 @@ class TokenCache:
         conn.commit()
         conn.close()
         
-    def clear_old(self, max_age_hours: int = MAX_CACHE_AGE_HOURS):
+    def clear_old(self, max_age_hours: int = DEFAULT_MAX_CACHE_AGE_HOURS):
         """Clear old cache entries"""
         cutoff = datetime.now() - timedelta(hours=max_age_hours)
         
@@ -207,13 +209,13 @@ class TokenCache:
 class TokenMetricsTracker:
     """Track and analyze token usage metrics"""
     
-    def __init__(self, db_path: Path = METRICS_DB):
+    def __init__(self, db_path: Path = TOKEN_METRICS_DB):
         self.db_path = db_path
         self._init_db()
         
     def _init_db(self):
         """Initialize metrics database"""
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_config_dir()
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
@@ -364,7 +366,7 @@ class TokenMetricsTracker:
 class ParallelTokenizer:
     """Parallel processing for tokenization and API requests"""
     
-    def __init__(self, max_workers: int = MAX_WORKERS):
+    def __init__(self, max_workers: int = DEFAULT_MAX_WORKERS):
         self.max_workers = max_workers
         self.encoder_cache = {}
         

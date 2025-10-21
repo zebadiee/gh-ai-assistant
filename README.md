@@ -69,6 +69,40 @@ After getting your API key, you **must** enable "Model Training" in OpenRouter s
 
 **Without this, you'll get rate limits even with credits!** See [OPENROUTER_SETUP.md](OPENROUTER_SETUP.md) for details.
 
+### Provider Configuration
+
+The assistant defaults to OpenRouter. Override the provider by setting
+`GH_AI_PROVIDER` (environment variable or `.env`). Supported values:
+
+- `openrouter` *(default)* — uses the existing OpenRouter rotation and token tracking.
+- `claude-cli` — delegates completions to the local Claude Code CLI. Optional overrides:
+  `CLAUDE_CLI_COMMAND`, `CLAUDE_CODE_MODEL`, `CLAUDE_CLI_TIMEOUT`.
+- `zai-glm` — calls the Z.ai GLM REST API. Provide `ZAI_API_KEY` and optionally
+  `ZAI_API_BASE`, `ZAI_MODEL`, `ZAI_TEMPERATURE`.
+
+Example `.env` snippets:
+
+```bash
+GH_AI_PROVIDER=claude-cli
+CLAUDE_CLI_COMMAND=claude
+CLAUDE_CODE_MODEL=claude-3-5-sonnet-latest
+```
+
+```bash
+GH_AI_PROVIDER=zai-glm
+ZAI_API_KEY=your-z-ai-key
+ZAI_API_BASE=https://api.z.ai/v1
+ZAI_MODEL=glm-4-air
+```
+
+Per-command overrides are also available:
+
+```bash
+python gh_ai_core.py ask --provider claude-cli "Explain decorators"
+python gh_ai_core.py chat --provider zai-glm
+```
+
+
 Get your free OpenRouter API key at: https://openrouter.ai/keys
 
 ### Basic Usage

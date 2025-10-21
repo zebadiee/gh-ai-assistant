@@ -15,10 +15,24 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 import subprocess
-import keyring
+
+try:
+    import keyring
+except ImportError:  # pragma: no cover - optional dependency
+    keyring = None
+
 import requests
 from pathlib import Path
 import time
+
+from token_recycler.config import CONFIG_DIR, USAGE_DB, ensure_config_dir
+from token_recycler.service import TokenRecyclerService
+from providers import (
+    ClaudeCLIClient,
+    ClaudeCLIError,
+    ZaiGLMClient,
+    ZaiGLMError,
+)
 
 # Import model monitoring and conversation storage
 try:
@@ -62,10 +76,32 @@ sqlite3.register_adapter(datetime, lambda val: val.isoformat())
 sqlite3.register_converter("TIMESTAMP", lambda val: datetime.fromisoformat(val.decode()))
 
 # Configuration
-CONFIG_DIR = Path.home() / ".gh-ai-assistant"
-DB_PATH = CONFIG_DIR / "usage.db"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 KEYRING_SERVICE = "gh-ai-assistant"
+ENV_FILE = Path(os.getenv("GH_AI_ENV_FILE", ".env"))
+
+def load_env_file(path: Path = ENV_FILE) -> None:
+    """Load environment variables from a local .env file if present."""
+
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+load_env_file()
+
+PROVIDER_CHOICES = ["openrouter", "claude-cli", "zai-glm"]
 
 # Free model prioritization based on OpenRouter
 # Note: Free models have daily limits. Check https://openrouter.ai/models for current availability
@@ -200,13 +236,13 @@ class TokenManager:
     """Intelligent token management with auto-rotation and usage tracking"""
     
     def __init__(self):
-        self.db_path = DB_PATH
+        self.db_path = USAGE_DB
         self._ensure_config_dir()
         self._init_database()
         
     def _ensure_config_dir(self):
         """Create configuration directory if it doesn't exist"""
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_config_dir()
         
     def _init_database(self):
         """Initialize SQLite database for usage tracking"""
@@ -393,9 +429,26 @@ class AIAssistant:
     """Main AI Assistant with intelligent model routing"""
     
     def __init__(self):
+        self.provider_mode = os.getenv("GH_AI_PROVIDER", "openrouter").lower()
+        self.claude_client: Optional[ClaudeCLIClient] = None
+        self.zai_client: Optional[ZaiGLMClient] = None
+
         self.token_manager = TokenManager()
         self.api_key = self._load_api_key()
-        self.client = OpenRouterClient(self.api_key) if self.api_key else None
+        self.client = None
+
+        if self.provider_mode == "claude-cli":
+            self.claude_client = ClaudeCLIClient()
+        elif self.provider_mode == "zai-glm":
+            self.zai_client = ZaiGLMClient()
+        else:
+            self.provider_mode = "openrouter"
+            self.client = OpenRouterClient(self.api_key) if self.api_key else None
+
+        self.token_recycler = None
+        if self.provider_mode == "openrouter":
+            self._init_token_recycler()
+
         self.ollama_client = OllamaClient()
         self.github_context = GitHubContextExtractor()
         self.use_ollama_fallback = True  # Enable local fallback by default
@@ -440,11 +493,37 @@ class AIAssistant:
         
     def _load_api_key(self) -> Optional[str]:
         """Load API key from system keyring"""
+        if keyring is None:
+            return None
         return keyring.get_password(KEYRING_SERVICE, "openrouter_api_key")
         
     def _save_api_key(self, api_key: str):
         """Save API key to system keyring"""
+        if keyring is None:
+            print("⚠️  Keyring module not available. Skipping secure storage.")
+            return
         keyring.set_password(KEYRING_SERVICE, "openrouter_api_key", api_key)
+
+    def _init_token_recycler(self) -> None:
+        """Ensure the token recycler service mirrors the current API client."""
+        if self.client:
+            self.token_recycler = TokenRecyclerService(
+                api_call=self.client.chat_completion,
+                token_manager=self.token_manager,
+            )
+        else:
+            self.token_recycler = None
+
+    def _ensure_token_recycler(self):
+        """Lazy-initialize the token recycler when needed."""
+        if not self.client:
+            self.token_recycler = None
+            return None
+
+        if getattr(self, "token_recycler", None) is None:
+            self._init_token_recycler()
+
+        return self.token_recycler
         
     def setup_api_key(self):
         """Interactive API key setup"""
@@ -474,6 +553,7 @@ class AIAssistant:
             self._save_api_key(api_key)
             self.api_key = api_key
             self.client = OpenRouterClient(api_key)
+            self._init_token_recycler()
             print("\n✅ API key saved successfully!")
             print("\n⚠️  NEXT STEPS:")
             print("   1. Enable 'Model Training': https://openrouter.ai/settings/privacy")
@@ -509,9 +589,18 @@ class AIAssistant:
         messages.append({"role": "user", "content": user_prompt})
         return messages
         
-    def ask(self, prompt: str, use_context: bool = True) -> str:
+    def ask(self, prompt: str, use_context: bool = True, provider: Optional[str] = None) -> str:
         """Ask the AI assistant a question with cloud and local fallback"""
-        
+
+        active_provider = (provider or self.provider_mode or "openrouter").lower()
+        if active_provider not in {"openrouter", "claude-cli", "zai-glm"}:
+            active_provider = "openrouter"
+
+        if active_provider == "claude-cli":
+            return self._ask_claude_cli(prompt, use_context)
+        if active_provider == "zai-glm":
+            return self._ask_zai_glm(prompt, use_context)
+
         # Check if bridge is active (recovering from total exhaustion)
         if self.memory_bridge and self.memory_bridge.active_bridge:
             status = self.memory_bridge.get_bridge_status()
@@ -600,132 +689,137 @@ class AIAssistant:
                 else:
                     messages = [{"role": "user", "content": prompt}]
                     
-                # Make API request with timing
-                start_time = time.time()
                 print(f"☁️  Using cloud model: {model}")
-                response = self.client.chat_completion(model, messages)
-                latency_ms = (time.time() - start_time) * 1000
-                
-                # Track current model
+                recycler = self._ensure_token_recycler()
+                result = None
+                response = {}
+                latency_ms = 0.0
+
+                if recycler:
+                    result = recycler.process(
+                        prompt=prompt,
+                        model=model,
+                        messages=messages,
+                        use_cache=True,
+                    )
+                    latency_ms = result.latency_ms
+                else:
+                    start_time = time.time()
+                    response = self.client.chat_completion(model, messages)
+                    latency_ms = (time.time() - start_time) * 1000
+
                 self.current_model = model
-                
-                # Handle rate limit - try next model
-                if "error" in response:
-                    error_type = response.get("error")
-                    
-                    # Record failure in monitor
-                    if self.monitor:
-                        self.monitor.record_request(
-                            model, 
-                            success=False, 
-                            latency_ms=latency_ms,
-                            error_type=error_type,
-                            error_message=response.get("message", "")
-                        )
-                    
-                    if error_type == "rate_limit" or response.get("status_code") == 429:
-                        print(f"⚠️  Rate limit hit for {model}")
-                        
-                        # Track exhausted model
-                        if model not in self.exhausted_models:
-                            self.exhausted_models.append(model)
-                        
-                        if self.model_selector:
-                            self.model_selector.mark_failure(model, "rate_limit")
-                        
-                        if attempt < len(models_to_try) - 1:
-                            print(f"🔄 Trying next cloud model...")
-                            time.sleep(1)
-                            continue
-                        else:
-                            # All cloud models exhausted
-                            print(f"☁️  All cloud models exhausted")
-                            
-                            # Check if bridge should activate
-                            all_model_ids = [m['id'] for m in FREE_MODELS]
-                            
-                            if self.memory_bridge and self.memory_bridge.should_activate_bridge(
-                                self.exhausted_models, all_model_ids
-                            ):
-                                print()
-                                print("🌉 ACTIVATING MEMORY BRIDGE (Ultimate Failsafe)")
-                                print()
-                                
-                                # Activate bridge to preserve context
-                                bridge_context = self.memory_bridge.activate_bridge(
-                                    user_prompt=prompt,
-                                    conversation_history=self.conversation_history,
-                                    exhausted_models=self.exhausted_models,
-                                    technical_context=self._extract_technical_context(),
-                                    project_state=self._extract_project_state()
-                                )
-                                
-                                # Show bridge status to user
-                                print(self.memory_bridge.format_bridge_message())
-                                
-                                return ("🌉 Memory Bridge Activated\n\n"
-                                       "All AI models are temporarily at rate limits.\n"
-                                       "Your conversation is preserved and will automatically\n"
-                                       "resume when any provider becomes available.\n\n"
-                                       "This ensures zero context loss with 100% uptime.")
-                            
-                            # Try local as last resort
-                            if self.use_ollama_fallback:
-                                print(f"☁️  Trying local models as last resort...")
-                                break
+
+                if result:
+                    if result.is_error():
+                        error_payload = result.error or {}
+                        error_type = error_payload.get("error") or error_payload.get("type")
+
+                        if self.monitor:
+                            self.monitor.record_request(
+                                model,
+                                success=False,
+                                latency_ms=latency_ms,
+                                error_type=error_type,
+                                error_message=error_payload.get(
+                                    "message",
+                                    error_payload.get("detail", ""),
+                                ),
+                            )
+
+                        if error_type == "rate_limit" or error_payload.get("status_code") == 429:
+                            print(f"⚠️  Rate limit hit for {model}")
+
+                            if model not in self.exhausted_models:
+                                self.exhausted_models.append(model)
+
+                            if self.model_selector:
+                                self.model_selector.mark_failure(model, "rate_limit")
+
+                            if attempt < len(models_to_try) - 1:
+                                print(f"🔄 Trying next cloud model...")
+                                time.sleep(1)
+                                continue
                             else:
-                                return self._rate_limit_error_message()
-                    else:
-                        return f"❌ Error: {response.get('error', 'Unknown error')}"
-                    
-                # Extract response
-                try:
-                    content = response['choices'][0]['message']['content']
-                    tokens_used = response.get('usage', {}).get('total_tokens', 0)
-                    
-                    # Check for empty content
-                    if not content or not content.strip():
+                                print(f"☁️  All cloud models exhausted")
+
+                                all_model_ids = [m["id"] for m in FREE_MODELS]
+
+                                if self.memory_bridge and self.memory_bridge.should_activate_bridge(
+                                    self.exhausted_models, all_model_ids
+                                ):
+                                    print()
+                                    print("🌉 ACTIVATING MEMORY BRIDGE (Ultimate Failsafe)")
+                                    print()
+
+                                    bridge_context = self.memory_bridge.activate_bridge(
+                                        user_prompt=prompt,
+                                        conversation_history=self.conversation_history,
+                                        exhausted_models=self.exhausted_models,
+                                        technical_context=self._extract_technical_context(),
+                                        project_state=self._extract_project_state(),
+                                    )
+
+                                    print(self.memory_bridge.format_bridge_message())
+
+                                    return (
+                                        "🌉 Memory Bridge Activated\n\n"
+                                        "All AI models are temporarily at rate limits.\n"
+                                        "Your conversation is preserved and will automatically\n"
+                                        "resume when any provider becomes available.\n\n"
+                                        "This ensures zero context loss with 100% uptime."
+                                    )
+
+                                if self.use_ollama_fallback:
+                                    print("☁️  Trying local models as last resort...")
+                                    break
+                                else:
+                                    return self._rate_limit_error_message()
+                        elif error_type == "parse_error":
+                            detail = error_payload.get("detail", "parse error")
+                            print(f"⚠️  Failed to parse response from {model}: {detail}")
+                            if attempt < len(models_to_try) - 1:
+                                continue
+                            else:
+                                return f"❌ Failed to get valid response from any model. Last error: {detail}"
+                        else:
+                            return f"❌ Error: {error_payload.get('error', error_payload.get('detail', 'Unknown error'))}"
+
+                    content = result.content or ""
+                    tokens_used = result.tokens_used()
+
+                    if not content.strip():
                         print(f"⚠️  Empty response from {model}, trying next...")
                         if self.monitor:
                             self.monitor.record_request(
-                                model, 
-                                success=False, 
+                                model,
+                                success=False,
                                 latency_ms=latency_ms,
                                 error_type="empty_response",
-                                error_message="Model returned empty content"
+                                error_message="Model returned empty content",
                             )
                         if attempt < len(models_to_try) - 1:
                             continue
                         else:
                             return "❌ All models returned empty responses"
-                    
-                    # Record success in monitor
+
                     if self.monitor:
                         self.monitor.record_request(
-                            model, 
-                            success=True, 
+                            model,
+                            success=True,
                             latency_ms=latency_ms,
-                            tokens_used=tokens_used
+                            tokens_used=tokens_used,
                         )
-                    
-                    # Record usage
-                    self.token_manager.record_usage(model, tokens_used, 0.0)
-                    
-                    # Update token count for handoff tracking
+
                     self.current_token_count += tokens_used
-                    
-                    # Track conversation for memory transfer
                     self.conversation_history.append({"role": "user", "content": prompt})
                     self.conversation_history.append({"role": "assistant", "content": content})
-                    
-                    # Keep only last 20 messages to prevent memory bloat
+
                     if len(self.conversation_history) > 20:
                         self.conversation_history = self.conversation_history[-20:]
-                    
-                    # Save to conversation history
+
                     if self.conversation_store and self.current_session_id:
                         try:
-                            # Save user message
                             self.conversation_store.add_message(
                                 self.current_session_id,
                                 Message(
@@ -733,10 +827,9 @@ class AIAssistant:
                                     content=prompt,
                                     timestamp=datetime.now(),
                                     model_used=None,
-                                    tokens_used=0
-                                )
+                                    tokens_used=0,
+                                ),
                             )
-                            # Save assistant response
                             self.conversation_store.add_message(
                                 self.current_session_id,
                                 Message(
@@ -744,34 +837,159 @@ class AIAssistant:
                                     content=content,
                                     timestamp=datetime.now(),
                                     model_used=model,
-                                    tokens_used=tokens_used
-                                )
+                                    tokens_used=tokens_used,
+                                ),
                             )
                         except Exception as e:
-                            # Don't fail the request if conversation storage fails
                             if self.monitor:
                                 print(f"⚠️  Failed to save conversation: {e}")
-                    
+
                     return content
-                except (KeyError, IndexError) as e:
-                    # Record parsing failure
-                    print(f"⚠️  Failed to parse response from {model}: {e}")
-                    if self.monitor:
-                        self.monitor.record_request(
-                            model, 
-                            success=False, 
-                            latency_ms=latency_ms,
-                            error_type="parsing_error",
-                            error_message=str(e)
-                        )
-                    
-                    # Try next model
-                    if attempt < len(models_to_try) - 1:
-                        print(f"🔄 Trying next cloud model...")
-                        continue
-                    else:
-                        return f"❌ Failed to get valid response from any model. Last error: {e}"
-        
+                else:
+                    if "error" in response:
+                        error_type = response.get("error")
+
+                        if self.monitor:
+                            self.monitor.record_request(
+                                model,
+                                success=False,
+                                latency_ms=latency_ms,
+                                error_type=error_type,
+                                error_message=response.get("message", ""),
+                            )
+
+                        if error_type == "rate_limit" or response.get("status_code") == 429:
+                            print(f"⚠️  Rate limit hit for {model}")
+
+                            if model not in self.exhausted_models:
+                                self.exhausted_models.append(model)
+
+                            if self.model_selector:
+                                self.model_selector.mark_failure(model, "rate_limit")
+
+                            if attempt < len(models_to_try) - 1:
+                                print(f"🔄 Trying next cloud model...")
+                                time.sleep(1)
+                                continue
+                            else:
+                                print(f"☁️  All cloud models exhausted")
+
+                                all_model_ids = [m["id"] for m in FREE_MODELS]
+
+                                if self.memory_bridge and self.memory_bridge.should_activate_bridge(
+                                    self.exhausted_models, all_model_ids
+                                ):
+                                    print()
+                                    print("🌉 ACTIVATING MEMORY BRIDGE (Ultimate Failsafe)")
+                                    print()
+
+                                    bridge_context = self.memory_bridge.activate_bridge(
+                                        user_prompt=prompt,
+                                        conversation_history=self.conversation_history,
+                                        exhausted_models=self.exhausted_models,
+                                        technical_context=self._extract_technical_context(),
+                                        project_state=self._extract_project_state(),
+                                    )
+
+                                    print(self.memory_bridge.format_bridge_message())
+
+                                    return (
+                                        "🌉 Memory Bridge Activated\n\n"
+                                        "All AI models are temporarily at rate limits.\n"
+                                        "Your conversation is preserved and will automatically\n"
+                                        "resume when any provider becomes available.\n\n"
+                                        "This ensures zero context loss with 100% uptime."
+                                    )
+
+                                if self.use_ollama_fallback:
+                                    print("☁️  Trying local models as last resort...")
+                                    break
+                                else:
+                                    return self._rate_limit_error_message()
+                        else:
+                            return f"❌ Error: {response.get('error', 'Unknown error')}"
+
+                    try:
+                        content = response["choices"][0]["message"]["content"]
+                        tokens_used = response.get("usage", {}).get("total_tokens", 0)
+
+                        if not content or not content.strip():
+                            print(f"⚠️  Empty response from {model}, trying next...")
+                            if self.monitor:
+                                self.monitor.record_request(
+                                    model,
+                                    success=False,
+                                    latency_ms=latency_ms,
+                                    error_type="empty_response",
+                                    error_message="Model returned empty content",
+                                )
+                            if attempt < len(models_to_try) - 1:
+                                continue
+                            else:
+                                return "❌ All models returned empty responses"
+
+                        if self.monitor:
+                            self.monitor.record_request(
+                                model,
+                                success=True,
+                                latency_ms=latency_ms,
+                                tokens_used=tokens_used,
+                            )
+
+                        self.token_manager.record_usage(model, tokens_used, 0.0)
+                        self.current_token_count += tokens_used
+                        self.conversation_history.append({"role": "user", "content": prompt})
+                        self.conversation_history.append({"role": "assistant", "content": content})
+
+                        if len(self.conversation_history) > 20:
+                            self.conversation_history = self.conversation_history[-20:]
+
+                        if self.conversation_store and self.current_session_id:
+                            try:
+                                self.conversation_store.add_message(
+                                    self.current_session_id,
+                                    Message(
+                                        role="user",
+                                        content=prompt,
+                                        timestamp=datetime.now(),
+                                        model_used=None,
+                                        tokens_used=0,
+                                    ),
+                                )
+                                self.conversation_store.add_message(
+                                    self.current_session_id,
+                                    Message(
+                                        role="assistant",
+                                        content=content,
+                                        timestamp=datetime.now(),
+                                        model_used=model,
+                                        tokens_used=tokens_used,
+                                    ),
+                                )
+                            except Exception as e:
+                                if self.monitor:
+                                    print(f"⚠️  Failed to save conversation: {e}")
+
+                        return content
+                    except (KeyError, IndexError) as e:
+                        # Record parsing failure
+                        print(f"⚠️  Failed to parse response from {model}: {e}")
+                        if self.monitor:
+                            self.monitor.record_request(
+                                model,
+                                success=False,
+                                latency_ms=latency_ms,
+                                error_type="parsing_error",
+                                error_message=str(e)
+                            )
+
+                        # Try next model
+                        if attempt < len(models_to_try) - 1:
+                            print(f"🔄 Trying next cloud model...")
+                            continue
+                        else:
+                            return f"❌ Failed to get valid response from any model. Last error: {e}"
+
         # Try Ollama (local models) as fallback
         if self.use_ollama_fallback and self.ollama_client.is_available():
             return self._try_ollama(prompt, use_context)
@@ -785,6 +1003,94 @@ class AIAssistant:
         else:
             return self._rate_limit_error_message()
     
+    def _append_conversation_record(self, prompt: str, content: str, model_label: str, tokens_used: int = 0) -> None:
+        """Persist conversation snippets to in-memory history and optional store."""
+
+        self.current_model = model_label
+        self.current_token_count = tokens_used
+        self.conversation_history.append({"role": "user", "content": prompt})
+        self.conversation_history.append({"role": "assistant", "content": content})
+
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
+
+        if self.conversation_store and self.current_session_id:
+            try:
+                self.conversation_store.add_message(
+                    self.current_session_id,
+                    Message(
+                        role="user",
+                        content=prompt,
+                        timestamp=datetime.now(),
+                        model_used=None,
+                        tokens_used=0,
+                    ),
+                )
+                self.conversation_store.add_message(
+                    self.current_session_id,
+                    Message(
+                        role="assistant",
+                        content=content,
+                        timestamp=datetime.now(),
+                        model_used=model_label,
+                        tokens_used=tokens_used,
+                    ),
+                )
+            except Exception as exc:
+                if self.monitor:
+                    print(f"⚠️  Failed to save conversation: {exc}")
+
+
+    def _ask_claude_cli(self, prompt: str, use_context: bool) -> str:
+        """Handle requests via Claude Code CLI."""
+
+        if not self.claude_client:
+            self.claude_client = ClaudeCLIClient()
+
+        messages = self.enhance_prompt_with_context(prompt) if use_context else [{"role": "user", "content": prompt}]
+        try:
+            result = self.claude_client.chat_completion(messages)
+        except ClaudeCLIError as exc:
+            return f"❌ Claude CLI error: {exc}"
+
+        content = (result.get("content") or "").strip()
+        if not content:
+            return "❌ Claude CLI returned empty output."
+
+        self._append_conversation_record(prompt, content, model_label="claude-cli")
+        return content
+
+
+    def _ask_zai_glm(self, prompt: str, use_context: bool) -> str:
+        """Handle requests via Z.ai GLM coding API."""
+
+        if not self.zai_client:
+            try:
+                self.zai_client = ZaiGLMClient()
+            except ZaiGLMError as exc:
+                return f"❌ Z.ai GLM configuration error: {exc}"
+
+        messages = self.enhance_prompt_with_context(prompt) if use_context else [{"role": "user", "content": prompt}]
+        try:
+            response = self.zai_client.chat_completion(messages)
+        except ZaiGLMError as exc:
+            return f"❌ Z.ai GLM error: {exc}"
+
+        try:
+            content = response["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return "❌ Z.ai GLM returned an unexpected response format."
+
+        usage = response.get("usage", {})
+        tokens_used = int(usage.get("total_tokens") or 0)
+        total_cost = float(usage.get("total_cost") or 0.0)
+        if tokens_used:
+            self.token_manager.record_usage("zai-glm", tokens_used, total_cost)
+
+        self._append_conversation_record(prompt, content, model_label="zai-glm", tokens_used=tokens_used)
+        return content
+
+
     def _try_ollama(self, prompt: str, use_context: bool) -> str:
         """Try local Ollama models"""
         available_models = self.ollama_client.list_models()
@@ -1038,8 +1344,12 @@ class AIAssistant:
         print(self.monitor.get_recommendation(FREE_MODELS, today_usage))
         print()
             
-    def interactive_chat(self, use_context: bool = True):
+    def interactive_chat(self, use_context: bool = True, provider: Optional[str] = None):
         """Start an interactive chat session"""
+        active_provider = (provider or self.provider_mode).lower()
+        if active_provider not in PROVIDER_CHOICES:
+            active_provider = self.provider_mode
+
         print("╔══════════════════════════════════════════════════════════════════════╗")
         print("║                                                                      ║")
         print("║              🤖 GitHub CLI AI Assistant - Chat Mode                 ║")
@@ -1048,6 +1358,7 @@ class AIAssistant:
         print()
         print("💬 Interactive chat mode started!")
         print(f"📍 Context: {'GitHub repo context included' if use_context else 'No context (general questions)'}")
+        print(f"🤖 Provider: {active_provider}")
         print()
         print("Commands:")
         print("  • Type your question and press Enter")
@@ -1109,7 +1420,7 @@ class AIAssistant:
                 
                 # Get AI response
                 print("AI: ", end="", flush=True)
-                response = self.ask(user_input, use_context)
+                response = self.ask(user_input, use_context, provider=active_provider)
                 print(response)
                 print()
                 
@@ -1143,12 +1454,22 @@ def main():
     chat_parser = subparsers.add_parser("chat", help="Start interactive chat mode")
     chat_parser.add_argument("--no-context", action="store_true", 
                            help="Don't include GitHub context")
+    chat_parser.add_argument(
+        "--provider",
+        choices=PROVIDER_CHOICES,
+        help="Override the configured provider for this session",
+    )
     
     # Ask command
     ask_parser = subparsers.add_parser("ask", help="Ask the AI assistant a question")
     ask_parser.add_argument("prompt", nargs="+", help="Your question or prompt")
     ask_parser.add_argument("--no-context", action="store_true", 
                            help="Don't include GitHub context")
+    ask_parser.add_argument(
+        "--provider",
+        choices=PROVIDER_CHOICES,
+        help="Override the configured provider for this request",
+    )
     
     # Stats command
     stats_parser = subparsers.add_parser("stats", help="Show usage statistics")
@@ -1169,6 +1490,14 @@ def main():
     
     # Bridge stats command
     subparsers.add_parser("bridge", help="Show memory bridge statistics")
+    cleanup_parser = subparsers.add_parser("recycler-cleanup", help="Prune cached completions and vacuum recycler databases")
+    cleanup_parser.add_argument(
+        "--max-age-hours",
+        type=int,
+        default=None,
+        help="Delete cache entries older than this many hours (default: 24)",
+    )
+
     
     args = parser.parse_args()
     
@@ -1178,11 +1507,11 @@ def main():
         assistant.setup_api_key()
     elif args.command == "chat":
         use_context = not args.no_context
-        assistant.interactive_chat(use_context)
+        assistant.interactive_chat(use_context, provider=args.provider)
     elif args.command == "ask":
         prompt = " ".join(args.prompt)
         use_context = not args.no_context
-        response = assistant.ask(prompt, use_context)
+        response = assistant.ask(prompt, use_context, provider=args.provider)
         print(f"\n{response}\n")
     elif args.command == "stats":
         assistant.show_stats(args.days)
@@ -1203,6 +1532,16 @@ def main():
         else:
             print("\n❌ Memory transfer system not available")
             print("   Run: cd gh-ai-assistant && pip install -e .")
+    elif args.command == "recycler-cleanup":
+        recycler = assistant._ensure_token_recycler()
+        if recycler:
+            summary = recycler.cleanup(max_age_hours=args.max_age_hours)
+            print("\n🧹 Token recycler cleanup complete")
+            print(f"   Removed entries: {summary['removed_entries']}")
+            print(f"   Cache DB: {summary['cache_db']}")
+            print(f"   Metrics DB: {summary['metrics_db']}")
+        else:
+            print("\n❌ Token recycler not available. Configure an API key first.")
     elif args.command == "bridge":
         if assistant.memory_bridge:
             stats = assistant.memory_bridge.get_statistics()

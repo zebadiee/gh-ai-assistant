@@ -10,11 +10,18 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from datetime import datetime
+from contextlib import nullcontext
 
 # Import from gh_ai_core
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
-from gh_ai_core import TokenManager, OpenRouterClient, AIAssistant, GitHubContextExtractor
+from gh_ai_core import (
+    TokenManager,
+    OpenRouterClient,
+    AIAssistant,
+    GitHubContextExtractor,
+    keyring as core_keyring,
+)
 
 
 class TestTokenManager(unittest.TestCase):
@@ -137,14 +144,13 @@ class TestGitHubContextExtractor(unittest.TestCase):
 class TestAIAssistant(unittest.TestCase):
     """Test AI Assistant integration"""
     
-    @patch('keyring.get_password')
-    def test_api_key_loading(self, mock_get_password):
+    def test_api_key_loading(self):
         """Test API key is loaded from keyring"""
-        mock_get_password.return_value = "test-api-key"
-        
-        assistant = AIAssistant()
-        
-        self.assertEqual(assistant.api_key, "test-api-key")
+        if core_keyring is None:
+            self.skipTest("keyring module not available")
+        with patch('gh_ai_core.keyring.get_password', return_value="test-api-key"):
+            assistant = AIAssistant()
+            self.assertEqual(assistant.api_key, "test-api-key")
         
     def test_enhance_prompt_with_context(self):
         """Test prompt enhancement with context"""
@@ -156,6 +162,47 @@ class TestAIAssistant(unittest.TestCase):
                 
                 self.assertIsInstance(messages, list)
                 self.assertTrue(any(msg['content'] == 'Test prompt' for msg in messages))
+
+    @patch('gh_ai_core.ClaudeCLIClient')
+    def test_claude_cli_provider(self, mock_cli_cls):
+        """Claude CLI provider should route through the CLI wrapper."""
+        os.environ['GH_AI_PROVIDER'] = 'claude-cli'
+        mock_cli = MagicMock()
+        mock_cli.chat_completion.return_value = {"content": "CLI response"}
+        mock_cli_cls.return_value = mock_cli
+        keyring_ctx = patch('gh_ai_core.keyring.get_password', return_value=None) if core_keyring else nullcontext()
+        with keyring_ctx:
+            assistant = AIAssistant()
+        output = assistant.ask('Hello from Claude', use_context=False)
+
+        self.assertEqual(output, 'CLI response')
+        mock_cli.chat_completion.assert_called_once()
+        os.environ.pop('GH_AI_PROVIDER', None)
+
+    @patch('gh_ai_core.ZaiGLMClient')
+    @patch.object(TokenManager, 'record_usage')
+    def test_zai_glm_provider(self, mock_record_usage, mock_glm_cls):
+        """Z.ai GLM provider should call the HTTP client and record usage."""
+        os.environ['GH_AI_PROVIDER'] = 'zai-glm'
+        os.environ['ZAI_API_KEY'] = 'dummy-key'
+        keyring_ctx = patch('gh_ai_core.keyring.get_password', return_value=None) if core_keyring else nullcontext()
+        mock_client = MagicMock()
+        mock_client.chat_completion.return_value = {
+            'choices': [{'message': {'content': 'GLM output'}}],
+            'usage': {'total_tokens': 42, 'total_cost': 0.0}
+        }
+        mock_glm_cls.return_value = mock_client
+        with keyring_ctx:
+            assistant = AIAssistant()
+        output = assistant.ask('Hello GLM', use_context=False)
+
+        self.assertEqual(output, 'GLM output')
+        mock_client.chat_completion.assert_called_once()
+        mock_record_usage.assert_called_once_with('zai-glm', 42, 0.0)
+
+        os.environ.pop('GH_AI_PROVIDER', None)
+        os.environ.pop('ZAI_API_KEY', None)
+
 
 
 def run_tests():
