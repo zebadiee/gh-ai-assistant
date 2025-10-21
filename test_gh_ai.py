@@ -154,7 +154,8 @@ class TestAIAssistant(unittest.TestCase):
         
     def test_enhance_prompt_with_context(self):
         """Test prompt enhancement with context"""
-        assistant = AIAssistant()
+        with patch('gh_ai_core.keyring.get_password', return_value=None):
+            assistant = AIAssistant()
         
         with patch.object(assistant.github_context, 'get_repo_info', return_value={}):
             with patch.object(assistant.github_context, 'get_current_changes', return_value=""):

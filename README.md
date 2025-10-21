@@ -340,6 +340,20 @@ python gh_ai_core.py ask "Hello, world!"
 python gh_ai_core.py stats
 ```
 
+## 🧭 SpecKit Immersive Workflow
+
+Want the spec-driven experience without guessing the steps? Follow this three-step recipe:
+
+1. **Check the setup** – Run `python scripts/speckit_check.py`. It tells you if the `.speckit/` folder is in place and whether you need tools like `uv` or `pipx`.
+2. **Follow the command path** – Use this simple order (think of it like a subway line):
+   ```text
+   /speckit.constitution → /speckit.specify → /speckit.plan → /speckit.tasks → /speckit.implement
+   ```
+   The command files live in `.speckit/commands/`, so any AI assistant (or you!) can open them and follow the prompt.
+3. **Match outputs to OpenSpec** – Each command feeds the matching file under `openspec/changes/<change-id>/` (specs, proposal, tasks, checklists). When you’re done, run `openspec validate <change-id> --strict` to make sure everything lines up.
+
+Need more detail or screenshots? Check `docs/spec-kit.md` – it keeps the language friendly and explains how to use the official SpecKit CLI if you want the full ride.
+
 ## 🔄 Updates and Maintenance
 
 ### Adding New Free Models
