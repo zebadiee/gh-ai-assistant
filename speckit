@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# One-step launcher for the SpecKit workflow.
+set -e
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+if command -v python3 >/dev/null 2>&1; then
+  python3 scripts/speckit_check.py
+else
+  echo "python3 is required to run SpecKit helper." >&2
+  exit 1
+fi
+
+cat <<'MSG'
+
+Next steps:
+  1. Open the command you need in .speckit/commands/ (e.g. /speckit.specify).
+  2. Follow the instructions and paste results into openspec/changes/<change-id>/.
+  3. When finished, run: openspec validate <change-id> --strict
+
+Happy spec-ing! 🔥
+MSG

@@ -4,13 +4,19 @@ SpecKit turns planning into a guided conversation. This repo already includes ev
 
 ---
 
-## 1. Run a quick health check
+## 1. Fire it up with one command
+
+```bash
+./speckit
+```
+
+The launcher runs the helper and shows what to do next. Under the hood it simply executes:
 
 ```bash
 python scripts/speckit_check.py
 ```
 
-The script tells you:
+The helper tells you:
 - whether the `.speckit/` folder exists (it contains all command prompts)
 - if your Python version is high enough for the official SpecKit CLI (needs 3.11+)
 - optional tools you can install later (`uv`, `pipx`)

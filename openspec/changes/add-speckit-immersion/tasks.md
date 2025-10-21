@@ -9,6 +9,7 @@
 - [x] Add `scripts/speckit_check.py` to surface prerequisites and next steps.
 - [x] Create `docs/spec-kit.md` describing CLI usage and manual flow.
 - [x] Update `README.md` and `openspec/AGENTS.md` to reference the immersive workflow.
+- [x] Add a one-step launcher script (`./speckit`) for quick starts.
 
 ## Testing & Validation
 - [x] Run `python scripts/speckit_check.py` and confirm output.

@@ -4,7 +4,7 @@ Instructions for AI coding assistants using OpenSpec for spec-driven development
 
 ## SpecKit Immersive Flow (Do this every time)
 
-1. **Check setup** – Run `python scripts/speckit_check.py`. The script reports missing tools or folders.
+1. **Check setup** – Run `./speckit` (calls the helper under the hood). It reports missing tools or folders.
 2. **Follow the command order** – `/speckit.constitution → /speckit.specify → /speckit.plan → /speckit.tasks → /speckit.implement`. Open each matching file in `.speckit/commands/` and follow the instructions.
 3. **Save results** – Copy the answers into `openspec/changes/<change-id>/` (specs, proposal, tasks, optional checklists).
 4. **Use helpers if needed** – `clarify`, `checklist`, and `analyze` live alongside the main commands.

@@ -344,7 +344,7 @@ python gh_ai_core.py stats
 
 Want the spec-driven experience without guessing the steps? Follow this three-step recipe:
 
-1. **Check the setup** – Run `python scripts/speckit_check.py`. It tells you if the `.speckit/` folder is in place and whether you need tools like `uv` or `pipx`.
+1. **Launch it** – Run `./speckit` (one word!). It triggers the helper and shows exactly what comes next.
 2. **Follow the command path** – Use this simple order (think of it like a subway line):
    ```text
    /speckit.constitution → /speckit.specify → /speckit.plan → /speckit.tasks → /speckit.implement

@@ -18,6 +18,11 @@ The repository MUST ship SpecKit templates and helper tooling so contributors ca
 - **WHEN** a user runs `python scripts/speckit_check.py`
 - **THEN** the script reports SpecKit directory status, tooling prerequisites, and links to documentation
 
+#### Scenario: One-command entrypoint exists
+- **GIVEN** a contributor is in the repo root
+- **WHEN** they execute `./speckit`
+- **THEN** the helper script runs and the terminal prints next steps for the SpecKit flow
+
 ### Requirement: Documentation Links SpecKit to OpenSpec
 The project MUST explain how to operate SpecKit commands and how outputs align with OpenSpec artifacts.
 
