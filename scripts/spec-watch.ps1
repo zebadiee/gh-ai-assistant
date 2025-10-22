@@ -21,7 +21,9 @@ function Start-Validation([string]$changeId) {
   }
 }
 
-$path = Join-Path 'openspec/changes' $Id
+$scriptDir = $PSScriptRoot
+$repoRoot = Resolve-Path (Join-Path $scriptDir '..')
+$path = Join-Path (Join-Path $repoRoot 'openspec/changes') $Id
 if (-not (Test-Path $path)) {
   throw "Change folder not found: $path"
 }
@@ -56,4 +58,3 @@ try {
 } finally {
   Get-EventSubscriber | Where-Object { $_.SourceIdentifier -like 'Spec*' } | Unregister-Event -Force
 }
-

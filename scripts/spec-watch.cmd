@@ -1,9 +1,10 @@
 @echo off
 setlocal
 set ID=%1
+set "ROOT=%~dp0.."
 if "%ID%"=="" (
-  if exist ".speckit\last_change_id.txt" (
-    set /p ID=<".speckit\last_change_id.txt"
+  if exist "%ROOT%\.speckit\last_change_id.txt" (
+    set /p ID=<"%ROOT%\.speckit\last_change_id.txt"
   )
 )
 if "%ID%"=="" (
@@ -13,4 +14,3 @@ if "%ID%"=="" (
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0spec-watch.ps1" -Id "%ID%"
 endlocal
-

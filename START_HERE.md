@@ -142,6 +142,16 @@ python gh_ai_core.py models
 python gh_ai_core.py stats
 ```
 
+### 🪟 One‑Click Launchers (Windows)
+
+- Double‑click `scripts\\spec-start.cmd` to run OpenSpec Easy Mode and auto‑open a watcher window for your new change.
+- `scripts\\spec-easy.cmd` runs only the Easy Mode wizard (no watcher).
+- `scripts\\spec-watch.cmd [change-id]` starts the watcher; if omitted, it uses `.speckit\\last_change_id.txt` saved by Easy Mode.
+
+Notes:
+- The last change id is saved at `.speckit\\last_change_id.txt` in the repository root.
+- Launchers work from File Explorer; no terminal needed.
+
 ---
 
 ## 📚 Documentation Guide

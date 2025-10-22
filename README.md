@@ -138,6 +138,16 @@ gh ai stats --days 30
 gh ai models
 ```
 
+## 🪟 One‑Click Launchers (Windows)
+
+- Double‑click `scripts\spec-start.cmd` to run the Easy Mode wizard and auto‑open a watcher window for your new change.
+- `scripts\spec-easy.cmd` runs only the Easy Mode wizard (no watcher).
+- `scripts\spec-watch.cmd [change-id]` starts the watcher. If no id is provided, it uses `.speckit\last_change_id.txt` created by Easy Mode.
+
+Notes:
+- The last change id is saved at `.speckit\last_change_id.txt` in the repository root.
+- Launchers work from File Explorer; no terminal needed.
+
 ## 📊 Usage Examples
 
 ### Context-Aware Code Review

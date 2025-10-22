@@ -50,29 +50,32 @@ if ($WithDecisionLog) { $paramMap['WithDecisionLog'] = $true }
 if ($WithPivot)       { $paramMap['WithPivot'] = $true }
 
 Write-Host "\nScaffolding files..." -ForegroundColor Yellow
-& ./scripts/speckit_map.ps1 @paramMap | Write-Output
+# Always resolve paths relative to this script's directory
+$scriptDir = $PSScriptRoot
+$repoRoot = Resolve-Path (Join-Path $scriptDir '..')
+& (Join-Path $scriptDir 'speckit_map.ps1') @paramMap | Write-Output
 
 Write-Host "\nChecking your work with strict validation..." -ForegroundColor Yellow
 & openspec validate $id --strict | Write-Output
 
-# Remember last change id for convenience launchers
+# Remember last change id for convenience launchers (at repo root)
 try {
-  $lastIdPath = Join-Path '.speckit' 'last_change_id.txt'
-  if (-not (Test-Path (Split-Path -Parent $lastIdPath))) {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $lastIdPath) -Force | Out-Null
-  }
+  $lastDir = Join-Path $repoRoot '.speckit'
+  $lastIdPath = Join-Path $lastDir 'last_change_id.txt'
+  if (-not (Test-Path $lastDir)) { New-Item -ItemType Directory -Path $lastDir -Force | Out-Null }
   Set-Content -LiteralPath $lastIdPath -Value $id -NoNewline
 } catch {
   Write-Host "(warning) Could not write .speckit/last_change_id.txt" -ForegroundColor DarkYellow
 }
 
 Write-Host "\nAll set! Open these files and fill them in:" -ForegroundColor Green
-Write-Host "  openspec/changes/$id/proposal.md"
-Write-Host "  openspec/changes/$id/tasks.md"
-if (Test-Path "openspec/changes/$id/design.md") { Write-Host "  openspec/changes/$id/design.md" }
-if (Test-Path "openspec/changes/$id/decision-log.md") { Write-Host "  openspec/changes/$id/decision-log.md" }
-if (Test-Path "openspec/changes/$id/pivot.md") { Write-Host "  openspec/changes/$id/pivot.md" }
-Write-Host "  openspec/changes/$id/specs/$cap/spec.md"
+$changeDir = Join-Path $repoRoot ("openspec/changes/" + $id)
+Write-Host ("  {0}" -f (Join-Path $changeDir 'proposal.md'))
+Write-Host ("  {0}" -f (Join-Path $changeDir 'tasks.md'))
+if (Test-Path (Join-Path $changeDir 'design.md'))        { Write-Host ("  {0}" -f (Join-Path $changeDir 'design.md')) }
+if (Test-Path (Join-Path $changeDir 'decision-log.md'))  { Write-Host ("  {0}" -f (Join-Path $changeDir 'decision-log.md')) }
+if (Test-Path (Join-Path $changeDir 'pivot.md'))         { Write-Host ("  {0}" -f (Join-Path $changeDir 'pivot.md')) }
+Write-Host ("  {0}" -f (Join-Path $changeDir ("specs/" + $cap + "/spec.md")))
 
 Write-Host "\nNext steps:" -ForegroundColor Cyan
 Write-Host "  1) Edit the files above (use Markdown preview)."
