@@ -25,6 +25,15 @@ This repo supports a fast SpecKit drafting flow with formal OpenSpec validation 
   - Get the proposal approved, implement changes, mark tasks as complete.
   - Archive after deployment: `openspec archive <id> --yes` (use `--skip-specs` for tooling-only changes).
 
+## Easy Mode (No Jargon)
+
+If you want a super simple flow:
+
+- Windows (PowerShell): `./scripts/spec-easy.ps1`
+- macOS/Linux/WSL (Bash): `./scripts/spec-easy.sh`
+
+Answer a couple questions. The script scaffolds files and runs strict validation. Then edit the files it lists and run `openspec validate <id> --strict` again.
+
 ## Scripts and Templates
 
 - PowerShell: `scripts/speckit_map.ps1`
