@@ -1,6 +1,11 @@
 param(
   [string]$DefaultId = 'add-sample-feature',
-  [string]$DefaultCapability = 'platform'
+  [string]$DefaultCapability = 'platform',
+  [string]$Id,
+  [string]$Capability,
+  [switch]$WithDecisionLog,
+  [switch]$WithPivot,
+  [switch]$NonInteractive
 )
 
 Set-StrictMode -Version Latest
@@ -9,25 +14,43 @@ $ErrorActionPreference = 'Stop'
 Write-Host "OpenSpec Easy Mode" -ForegroundColor Cyan
 Write-Host "Answer a few questions. I’ll do the rest." -ForegroundColor Cyan
 
-$id = Read-Host ("Change ID (kebab-case) [`$DefaultId: $DefaultId`]")
-if ([string]::IsNullOrWhiteSpace($id)) { $id = $DefaultId }
+if ($PSBoundParameters.ContainsKey('Id')) {
+  $id = $Id
+} elseif ($NonInteractive) {
+  $id = $DefaultId
+} else {
+  $id = Read-Host ("Change ID (kebab-case) [`$DefaultId: $DefaultId`]")
+  if ([string]::IsNullOrWhiteSpace($id)) { $id = $DefaultId }
+}
 
 # Simple sanitize: spaces→-, lowercase, remove invalid chars
 $id = ($id.Trim().ToLower() -replace '\s+', '-') -replace '[^a-z0-9-]', ''
 if ([string]::IsNullOrWhiteSpace($id)) { throw 'Invalid change id.' }
 
-$cap = Read-Host ("Capability folder [`$DefaultCapability: $DefaultCapability`]")
-if ([string]::IsNullOrWhiteSpace($cap)) { $cap = $DefaultCapability }
+if ($PSBoundParameters.ContainsKey('Capability')) {
+  $cap = $Capability
+} elseif ($NonInteractive) {
+  $cap = $DefaultCapability
+} else {
+  $cap = Read-Host ("Capability folder [`$DefaultCapability: $DefaultCapability`]")
+  if ([string]::IsNullOrWhiteSpace($cap)) { $cap = $DefaultCapability }
+}
 
-$useDecision = Read-Host "Add decision-log.md? (y/N)"
-$usePivot    = Read-Host "Add pivot.md? (y/N)"
+if (-not $PSBoundParameters.ContainsKey('WithDecisionLog') -and -not $NonInteractive) {
+  $useDecision = Read-Host "Add decision-log.md? (y/N)"
+  if ($useDecision -match '^(y|yes)$') { $WithDecisionLog = $true }
+}
+if (-not $PSBoundParameters.ContainsKey('WithPivot') -and -not $NonInteractive) {
+  $usePivot = Read-Host "Add pivot.md? (y/N)"
+  if ($usePivot -match '^(y|yes)$') { $WithPivot = $true }
+}
 
-$argsList = @('-Id', $id, '-Capability', $cap)
-if ($useDecision -match '^(y|yes)$') { $argsList += '-WithDecisionLog' }
-if ($usePivot -match '^(y|yes)$')    { $argsList += '-WithPivot' }
+$paramMap = @{ Id = $id; Capability = $cap }
+if ($WithDecisionLog) { $paramMap['WithDecisionLog'] = $true }
+if ($WithPivot)       { $paramMap['WithPivot'] = $true }
 
 Write-Host "\nScaffolding files..." -ForegroundColor Yellow
-& ./scripts/speckit_map.ps1 @argsList | Write-Output
+& ./scripts/speckit_map.ps1 @paramMap | Write-Output
 
 Write-Host "\nChecking your work with strict validation..." -ForegroundColor Yellow
 & openspec validate $id --strict | Write-Output
@@ -44,4 +67,3 @@ Write-Host "\nNext steps:" -ForegroundColor Cyan
 Write-Host "  1) Edit the files above (use Markdown preview)."
 Write-Host "  2) Run: openspec validate $id --strict"
 Write-Host "  3) After approval and implementation: openspec archive $id --yes"
-

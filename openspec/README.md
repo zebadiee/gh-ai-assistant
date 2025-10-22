@@ -34,6 +34,13 @@ If you want a super simple flow:
 
 Answer a couple questions. The script scaffolds files and runs strict validation. Then edit the files it lists and run `openspec validate <id> --strict` again.
 
+## Live Validation (Auto‑watch)
+
+- PowerShell (Windows): `./scripts/spec-watch.ps1 -Id <change-id>`
+- Bash (macOS/Linux/WSL): `./scripts/spec-watch.sh <change-id>`
+
+These watch your change folder and re-run `openspec validate <id> --strict` whenever you save. If validation fails, the scripts print quick fix tips.
+
 ## Scripts and Templates
 
 - PowerShell: `scripts/speckit_map.ps1`
