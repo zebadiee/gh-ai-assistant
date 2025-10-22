@@ -55,6 +55,17 @@ Write-Host "\nScaffolding files..." -ForegroundColor Yellow
 Write-Host "\nChecking your work with strict validation..." -ForegroundColor Yellow
 & openspec validate $id --strict | Write-Output
 
+# Remember last change id for convenience launchers
+try {
+  $lastIdPath = Join-Path '.speckit' 'last_change_id.txt'
+  if (-not (Test-Path (Split-Path -Parent $lastIdPath))) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $lastIdPath) -Force | Out-Null
+  }
+  Set-Content -LiteralPath $lastIdPath -Value $id -NoNewline
+} catch {
+  Write-Host "(warning) Could not write .speckit/last_change_id.txt" -ForegroundColor DarkYellow
+}
+
 Write-Host "\nAll set! Open these files and fill them in:" -ForegroundColor Green
 Write-Host "  openspec/changes/$id/proposal.md"
 Write-Host "  openspec/changes/$id/tasks.md"

@@ -41,6 +41,17 @@ Answer a couple questions. The script scaffolds files and runs strict validation
 
 These watch your change folder and re-run `openspec validate <id> --strict` whenever you save. If validation fails, the scripts print quick fix tips.
 
+## Windows One‑Click Launchers
+
+- Double‑click in File Explorer:
+  - `scripts\spec-start.cmd` → Runs Easy Mode, then opens a new window that watches your change.
+  - `scripts\spec-easy.cmd` → Just the Easy Mode wizard.
+  - `scripts\spec-watch.cmd` → Starts the watcher. With no args, uses `.speckit\last_change_id.txt`.
+
+- Single command alternatives (PowerShell):
+  - `./scripts/spec-start.cmd`
+  - Or run separately: `./scripts/spec-easy.ps1` then `./scripts/spec-watch.ps1 -Id <id>`
+
 ## Scripts and Templates
 
 - PowerShell: `scripts/speckit_map.ps1`
