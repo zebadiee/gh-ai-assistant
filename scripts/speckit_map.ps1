@@ -2,6 +2,8 @@ param(
   [Parameter(Mandatory=$true)][string]$Id,
   [string]$Capability = 'platform',
   [switch]$NoDesign,
+  [switch]$WithDecisionLog,
+  [switch]$WithPivot,
   [switch]$Force
 )
 
@@ -38,6 +40,16 @@ Write-File (Join-Path $specRoot 'spec.md') $specTpl
 if (-not $NoDesign) {
   $designTpl = Resolve-Template 'design-skeleton.md'
   Write-File (Join-Path $changeRoot 'design.md') $designTpl
+}
+
+if ($WithDecisionLog) {
+  $decTpl = Resolve-Template 'decision-log-skeleton.md'
+  Write-File (Join-Path $changeRoot 'decision-log.md') $decTpl
+}
+
+if ($WithPivot) {
+  $pivotTpl = Resolve-Template 'pivot-skeleton.md'
+  Write-File (Join-Path $changeRoot 'pivot.md') $pivotTpl
 }
 
 Write-Host "Created change at: $changeRoot" -ForegroundColor Green

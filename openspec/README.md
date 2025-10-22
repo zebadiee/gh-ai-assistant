@@ -45,3 +45,18 @@ This repo supports a fast SpecKit drafting flow with formal OpenSpec validation 
 - Use Markdown preview for proposal, tasks, design, and spec files.
 - Prefer modifying existing capabilities over duplicates; see `openspec/AGENTS.md` for rules.
 
+## Handling Direction Changes (Anticipation & Adaptation)
+
+- Capture assumptions and signals early
+  - Add “Assumptions” and “Signals to watch” in `design.md`.
+- Maintain a decision log
+  - Create `decision-log.md` (use scaffolding flags) to record dated decisions, signals, and rationale.
+- Prepare a pivot plan
+  - Create `pivot.md` to document why/what/impact, migration/rollback, and success/kill criteria.
+- Stage gates and criteria
+  - Add measurable acceptance, success, and kill criteria in `proposal.md`/`design.md`.
+- Update specs promptly
+  - Reflect direction changes in delta specs (`## MODIFIED|RENAMED`) with updated scenarios.
+- Tooling support
+  - PowerShell: `./scripts/speckit_map.ps1 -Id <id> -Capability <cap> -WithDecisionLog -WithPivot`
+  - Bash: `./scripts/speckit_map.sh <id> <cap> --with-decision-log --with-pivot`
